@@ -1,9 +1,16 @@
 import collections
+import logging
 import string
 import random
 import datetime
 import asyncio
 from contextlib import suppress
+
+import discord.utils
+
+
+# set up the logger
+log = logging.getLogger(__name__)
 
 
 class UserManager:
@@ -58,12 +65,15 @@ class UserManager:
         async with self._lock:
             # check if token is valid
             if token not in self._tokens:
+                log.debug('Token {} verification failed')
                 return None
             timestamp, user = self._tokens[token]
             # only one connection is possible at the time
             # duplicate token will time out eventually
             if user in self._listeners:
+                log.debug('Token {} is valid for user {}, but the user is connected already'.format(token, user))
                 return None
+            log.debug('Token {} verification passed, associated user: {}'.format(token, user))
             return user
 
     #
@@ -103,7 +113,7 @@ class UserManager:
     # API for user manipulation
     #
     async def add_listener(self, discord_id, token=None):
-        current_time=datetime.datetime.now()
+        current_time = datetime.datetime.now()
         async with self._lock:
             if discord_id in self._listeners and token is None and self._listeners[discord_id]['direct']:
                 # someone using a direct stream switches over to the discord voice
@@ -116,7 +126,7 @@ class UserManager:
                 try:
                     self._tokens.pop(token)
                 except KeyError:
-                    print('Warning: adding listener with invalid token, race condition occurred')
+                    log.warning('Adding listener {} with an invalid token, race condition occurred'.format(discord_id))
 
             if len(self._listeners) == 1 and self._on_first_listener is not None:
                 self._on_first_listener()
@@ -158,6 +168,7 @@ class UserManager:
         token = ''.join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(64))
         async with self._lock:
             # key collisions are possible, but should be negligible
+            log.debug('Added token {} for user {}'.format(token, discord_id))
             self._tokens[token] = (current_time, discord_id)
             return self._server.url_format.format(token)
 
@@ -168,6 +179,7 @@ class UserManager:
         current_time = datetime.datetime.now()
         async with self._lock:
             if discord_id in self._listeners:
+                log.debug('Refreshing activity for user {}'.format(discord_id))
                 attributes = self._listeners[discord_id]
                 attributes['active'] = current_time
                 attributes['notified_ds'] = False
@@ -176,37 +188,61 @@ class UserManager:
     #
     # Internal timeout checking task
     #
+    def _whisper(self, user_id, message):
+        user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
+        if user is None:
+            return
+        self._bot.loop.create_task(self._bot.send_message(user, message))
+
     async def _check_timeouts(self):
         while True:
             await asyncio.sleep(20, loop=self._bot.loop)
             current_time = datetime.datetime.now()
+            log.debug('Starting inactivity check')
+            # sets used to store users and tokens to remove
+            remove_tokens = set()
+            remove_djs = set()
+            remove_listeners = set()
             async with self._lock:
                 # check all tokens
                 for token, (created, user) in self._tokens.items():
                     if current_time - created > self._config_ds_token_timeout:
-                        self._tokens.pop(token)
+                        remove_tokens.add(token)
                 # check all djs
                 for dj in self._queue:
                     attributes = self._listeners[dj]
                     time_diff = current_time - attributes['active']
                     if time_diff > self._config_dj_remove_time:
-                        self._queue.remove(dj)
-                        # TODO: write a message
+                        self._whisper(dj, 'You have been removed from the DJ queue due to inactivity')
+                        remove_djs.add(dj)
                     elif time_diff > self._config_dj_notify_time and not attributes['notified_dj']:
-                        # TODO: notify
+                        log.info('DJ {} notified for being inactive'.format(dj))
+                        self._whisper(dj, 'You\'re about to be removed from the DJ queue due to inactivity.\n'
+                                         'Please reply to this message to prevent that.')
                         attributes['notified_dj'] = True
                 # and all the direct listeners too
                 for listener, attributes in self._listeners.items():
-                    if attributes['direct']:
-                        time_diff = current_time - attributes['active']
-                        if time_diff > self._config_ds_remove_time:
-                            self._bot.loop.create_task(self._server.disconnect(listener))
-                            try:
-                                self._queue.remove(listener)
-                            except ValueError:
-                                pass
-                            self._listeners.pop(listener)
-                            # TODO: write a message
-                        elif time_diff > self._config_ds_notify_time and not attributes['notified_ds']:
-                            # TODO: notify
-                            attributes['notified_ds'] = True
+                    if not attributes['direct']:
+                        continue
+                    time_diff = current_time - attributes['active']
+                    if time_diff > self._config_ds_remove_time:
+                        self._whisper(listener, 'You have been disconnected from the stream due to inactivity')
+                        remove_djs.add(listener)
+                        remove_listeners.add(listener)
+                    elif time_diff > self._config_ds_notify_time and not attributes['notified_ds']:
+                        log.info(listener, 'Listener {} notified for being inactive'.format(listener))
+                        self._whisper(listener, 'You\'re about to be disconnected from the stream due to inactivity.\n'
+                                               'Please reply to this message to prevent that.')
+                        attributes['notified_ds'] = True
+
+                # now it is save to edit lists / dictionaries
+                for token in remove_tokens:
+                    log.info('Token {} has timed out'.format(token))
+                    self._tokens.pop(token)
+                for dj in remove_djs:
+                    log.info('DJ {} has timed out'.format(dj))
+                    self._queue.remove(dj)
+                for listener in remove_listeners:
+                    log.info('Listener {} has timed out'.format(listener))
+                    self._bot.loop.create_task(self._server.disconnect(listener))
+                    self._listeners.pop(listener)
