@@ -8,13 +8,12 @@ from contextlib import suppress
 
 import discord.utils
 
-
 # set up the logger
 log = logging.getLogger(__name__)
 
 
 class UserManager:
-    def __init__(self, config, bot, server):
+    def __init__(self, config, bot, aac_server):
         self._config_ds_token_timeout = datetime.timedelta(seconds=int(config['ds_token_timeout']))
         self._config_ds_notify_time = datetime.timedelta(seconds=int(config['ds_notify_time']))
         self._config_ds_remove_time = datetime.timedelta(seconds=int(config['ds_remove_time']))
@@ -22,7 +21,7 @@ class UserManager:
         self._config_dj_remove_time = datetime.timedelta(seconds=int(config['dj_remove_time']))
 
         self._bot = bot
-        self._server = server
+        self._aac_server = aac_server
 
         self._lock = asyncio.Lock(loop=bot.loop)
 
@@ -30,16 +29,14 @@ class UserManager:
         self._listeners = dict()  # maps discord_id (int) -> {'active': timestamp, 'direct': boolean, 'notified_dj'...}
         self._queue = collections.deque()
 
+        self._player = None
         self._timeout_task = None
-
-        self._on_first_listener = None
-        self._on_first_dj = None
-        self._on_last_dj = None
 
     #
     # Resource management wrappers
     #
-    def init(self):
+    def init(self, player):
+        self._player = player
         self._timeout_task = self._bot.loop.create_task(self._check_timeouts())
 
     async def cleanup(self):
@@ -94,21 +91,6 @@ class UserManager:
         async with self._lock:
             self._queue.clear()
 
-    def on_first_listener(self, func):
-        assert callable(func)
-        self._on_first_listener = func
-        return func
-
-    def on_first_dj(self, func):
-        assert callable(func)
-        self._on_first_dj = func
-        return func
-
-    def on_last_dj(self, func):
-        assert callable(func)
-        self._on_last_dj = func
-        return func
-
     #
     # API for user manipulation
     #
@@ -117,7 +99,7 @@ class UserManager:
         async with self._lock:
             if discord_id in self._listeners and token is None and self._listeners[discord_id]['direct']:
                 # someone using a direct stream switches over to the discord voice
-                self._bot.loop.create_task(self._server.disconnect(discord_id))
+                self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
 
             self._listeners[discord_id] = {'active': current_time, 'direct': token is None, 'notified_ds': False,
                                            'notified_dj': False}
@@ -128,20 +110,19 @@ class UserManager:
                 except KeyError:
                     log.warning('Adding listener {} with an invalid token, race condition occurred'.format(discord_id))
 
-            if len(self._listeners) == 1 and self._on_first_listener is not None:
-                self._on_first_listener()
+            self._player.users_changed()
 
     async def remove_listener(self, discord_id):
         async with self._lock:
             # remove the user from the queue, if present
-            try:
+            with suppress(ValueError):
                 self._queue.remove(discord_id)
-            except ValueError:
-                pass
             try:
                 self._listeners.pop(discord_id)
             except KeyError:
                 raise ValueError('User is not listening')
+
+            self._player.users_changed()
 
     async def join_queue(self, discord_id):
         async with self._lock:
@@ -149,8 +130,9 @@ class UserManager:
                 raise ValueError('User is not listening')
             self._queue.append(discord_id)
 
-            if len(self._queue) == 1 and self._on_first_dj is not None:
-                self._on_first_dj()
+            if len(self._queue) == 1:
+                self._player.cooldown_set()
+            self._player.users_changed()
 
     async def leave_queue(self, discord_id):
         async with self._lock:
@@ -159,8 +141,9 @@ class UserManager:
             except ValueError:
                 raise ValueError('User is not in queue')
 
-            if len(self._queue) == 0 and self._on_last_dj is not None:
-                self._on_last_dj()
+            if len(self._queue) == 0:
+                self._player.cooldown_reset()
+            self._player.users_changed()
 
     async def generate_url(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
@@ -170,7 +153,7 @@ class UserManager:
             # key collisions are possible, but should be negligible
             log.debug('Added token {} for user {}'.format(token, discord_id))
             self._tokens[token] = (current_time, discord_id)
-            return self._server.url_format.format(token)
+            return self._aac_server.url_format.format(token)
 
     #
     # API for activity update
@@ -218,7 +201,7 @@ class UserManager:
                     elif time_diff > self._config_dj_notify_time and not attributes['notified_dj']:
                         log.info('DJ {} notified for being inactive'.format(dj))
                         self._whisper(dj, 'You\'re about to be removed from the DJ queue due to inactivity.\n'
-                                         'Please reply to this message to prevent that.')
+                                          'Please reply to this message to prevent that.')
                         attributes['notified_dj'] = True
                 # and all the direct listeners too
                 for listener, attributes in self._listeners.items():
@@ -232,7 +215,7 @@ class UserManager:
                     elif time_diff > self._config_ds_notify_time and not attributes['notified_ds']:
                         log.info(listener, 'Listener {} notified for being inactive'.format(listener))
                         self._whisper(listener, 'You\'re about to be disconnected from the stream due to inactivity.\n'
-                                               'Please reply to this message to prevent that.')
+                                                'Please reply to this message to prevent that.')
                         attributes['notified_ds'] = True
 
                 # now it is save to edit lists / dictionaries
@@ -244,5 +227,5 @@ class UserManager:
                     self._queue.remove(dj)
                 for listener in remove_listeners:
                     log.info('Listener {} has timed out'.format(listener))
-                    self._bot.loop.create_task(self._server.disconnect(listener))
+                    self._bot.loop.create_task(self._aac_server.disconnect(listener))
                     self._listeners.pop(listener)

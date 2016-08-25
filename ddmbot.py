@@ -73,7 +73,7 @@ async def on_ready():
                             'text channel used will be ignored.')
 
             log.info('Initializing user manager')
-            users.init()
+            users.init(player)
             # populate user manager with existing listeners
             for member in ddmbot.voice_channel.voice_members:
                 if not member.voice.self_deaf:

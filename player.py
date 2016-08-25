@@ -170,10 +170,6 @@ class Player:
         self._stream_url = None
         self._stream_name = None
 
-        users.on_first_listener(self._first_listener_callback)
-        users.on_first_dj(self._dj_cooldown.set)
-        users.on_last_dj(self._dj_cooldown.clear)
-
         self._player_task = None
         self._pcm_thread = None
         self._aac_thread = None
@@ -305,16 +301,30 @@ class Player:
         return True
 
     #
+    # UserManager interface
+    #
+    def cooldown_set(self):
+        self._dj_cooldown.set()
+
+    def cooldown_reset(self):
+        self._dj_cooldown.clear()
+
+    def users_changed(self):
+        self._bot.loop.create_task(self._users_changed())
+
+    #
     # Internally used methods and callbacks
     #
-    async def _whisper(self, user_id, message):
-        user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
-        if user is None:
-            return
-        return await self._bot.send_message(user, message)
-
-    async def _message(self, message):
-        return await self._bot.send_message(self._bot.text_channel, message)
+    async def _users_changed(self):
+        async with self._transition_lock:
+            if self.waiting:
+                # we were probably waiting for the first listener, so try to leave this state
+                self._switch_state.set()
+                return
+            if self.stopped:
+                return
+        # if we fell out here that means we are in a state where may be appropriate to update a message
+        await self._update_status()
 
     async def _update_status(self):
         log.debug('Waiting for lock from _update_status')
@@ -323,7 +333,7 @@ class Player:
             hypes = self._song_context.get_hype_set() if self.playing else set()
 
             # get all the display names mapping
-            all_ids = listeners | hypes
+            all_ids = listeners | hypes | {self._song_context.user_id}
             names = dict()
             if len(all_ids) > 0:
                 for member in self._bot.get_all_members():
@@ -356,7 +366,7 @@ class Player:
 
                 # check for the automatic skip
                 listener_skips = listeners & self._song_context.get_skip_set()
-                if len(listener_skips) / len(listeners) >= self._config_skip_ratio:
+                if len(listener_skips) > self._config_skip_ratio * len(listeners):
                     await self._bot.send_message(self._bot.text_channel, 'Community voted to skip')
                     self._switch_state.set()
 
@@ -377,33 +387,11 @@ class Player:
                     # TODO: messages needs to be unpinned to be pinned (limit of 50 pinned messages)
                     # await self._bot.pin_message(self._status_message)
 
-    def _first_listener_callback(self):
-        self._bot.loop.create_task(self._first_listener())
-
-    async def _first_listener(self):
-        async with self._transition_lock:
-            if self.waiting:
-                self._switch_state.set()
-
-    def _playback_ended_callback(self):
-        self._bot.loop.call_soon_threadsafe(self._playback_ended)
-
-    def _playback_ended(self):
-        if self._transition_lock.locked():
-            # assuming the FSM is doing a transition already
-            return
-        # otherwise should be safe, stream will stop or new song played
-        self._switch_state.set()
-
-    async def _delayed_dj_task(self):
-        await asyncio.sleep(15)
-        self._dj_cooldown.set()
-
     async def _get_song(self, dj, retries=3):
         for _ in range(retries):
             try:
                 song = await self._songs.get_next_song(dj)
-            except LookupError as e:  # no more songs in DJ's playlist
+            except LookupError:  # no more songs in DJ's playlist
                 await self._users.leave_queue(dj)
                 await self._whisper(dj, 'Your playlist is empty. Please add more songs and rejoin the DJ queue.')
                 return None
@@ -567,3 +555,29 @@ class Player:
             # clean the IPC pipes used
             self._pcm_thread.flush()
             self._aac_thread.flush()
+
+    #
+    # Other helper methods
+    #
+    def _playback_ended_callback(self):
+        self._bot.loop.call_soon_threadsafe(self._playback_ended)
+
+    def _playback_ended(self):
+        if self._transition_lock.locked():
+            # assuming the FSM is doing a transition already
+            return
+        # otherwise should be safe, stream will stop or new song played
+        self._switch_state.set()
+
+    async def _delayed_dj_task(self):
+        await asyncio.sleep(15)
+        self._dj_cooldown.set()
+
+    async def _whisper(self, user_id, message):
+        user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
+        if user is None:
+            return
+        return await self._bot.send_message(user, message)
+
+    async def _message(self, message):
+        return await self._bot.send_message(self._bot.text_channel, message)
