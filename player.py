@@ -180,6 +180,7 @@ class Player:
         self._status_message = None
         self._status_channel = None
 
+        self._meta_callback = None
         self._voice_client = None
 
     #
@@ -191,6 +192,7 @@ class Player:
                                                  type=discord.ChannelType.text)
         if self._status_channel is None:
             raise RuntimeError('Status text channel specified was not found')
+        self._meta_callback = aac_server.set_meta
 
         # TODO: replace protected member access with a method VoiceClient.is_connected()
         self._pcm_thread = PcmProcessor(self._config['pcm_pipe'], bot_voice.encoder, bot_voice._connected,
@@ -314,27 +316,37 @@ class Player:
             hypes = self._song_context.get_hype_set() if self.playing else set()
 
             # get all the display names mapping
+            all_ids = listeners | hypes
             names = dict()
-            if len(listeners | hypes) > 0:
+            if len(all_ids) > 0:
                 for member in self._bot.get_all_members():
                     int_id = int(member.id)
-                    if int_id in listeners | hypes:
+                    if int_id in all_ids:
                         names[int_id] = member.display_name
-                        if len(names) == len(listeners):
+                        # break if we found all of them
+                        if len(names) == len(all_ids):
                             break
 
-            listeners_str = ', '.join(names.values())
+            listeners_str = ', '.join([names[ids] for ids in listeners])
             message = None
+            stream_title = None
 
             if self.playing:
                 # assemble the rest of the information
                 hypes_str = ', '.join([names[ids] for ids in hypes])
                 djs_str = ' -> '.join([names[ids] for ids in djs])
-                message = 'Playing: [{0.song_id}] {0.title}, queued by <@{0.user_id}>\n' \
-                          'Hypes: {0.hype_count} ({1})\n' \
+                queued_by = 'auto-playlist' if self._song_context.user_id is None else \
+                    '<@{}>'.format(self._song_context.user_id)
+
+                message = 'Playing: [{0.song_id}] {0.title}, queued by {1}\n' \
+                          'Hypes: {0.hype_count} ({2})\n' \
                           'Skip votes: {0.skip_votes}\n' \
-                          'Listeners: {2}\n' \
-                          'Queue: {3}'.format(self._song_context, hypes_str, listeners_str, djs_str)
+                          'Listeners: {3}\n' \
+                          'Queue: {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
+
+                queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
+                stream_title = '{} queued by {}'.format(self._song_context.title, queued_by)
+
                 # check for the automatic skip
                 listener_skips = listeners & self._song_context.get_skip_set()
                 if len(listener_skips) / len(listeners) >= self._config_skip_ratio:
@@ -344,12 +356,15 @@ class Player:
             elif self.streaming:
                 message = 'Playing stream: {}\n' \
                           'Listeners: {}'.format(self._stream_name, listeners_str)
+                stream_title = self._stream_name
 
             if message:
                 if self._status_message:
                     self._status_message = await self._bot.edit_message(self._status_message, message)
                 else:
                     self._status_message = await self._bot.send_message(self._status_channel, message)
+                    await self._meta_callback(stream_title)
+
                     # TODO: messages needs to be unpinned to be pinned (limit of 50 pinned messages)
                     # await self._bot.pin_message(self._status_message)
 
