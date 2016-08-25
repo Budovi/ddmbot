@@ -61,14 +61,18 @@ class StreamServer:
         # user -> (response, meta, init)
         self._connections = dict()
 
-        self._generic_response_headers = {'Cache-Control': 'no-cache', 'Connection': 'close', 'Pragma': 'no-cache',
-                                          'Server': 'DdmBot v:0.1 alpha', 'Content-Type': 'audio/aac',
-                                          'Icy-BR': config['bitrate'], 'Icy-Pub': '0'}
+        self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{}\r\nhttp://{}:{}{}?{{}}'\
+            .format(config['name'], config['hostname'], config['port'], config['stream_path'])
+        self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot v:0.1 alpha', 'Content-type':
+                                           'audio/mpegurl'}
+        self._stream_response_headers = {'Cache-Control': 'no-cache', 'Connection': 'close', 'Pragma': 'no-cache',
+                                         'Server': 'DdmBot v:0.1 alpha', 'Content-Type': 'audio/aac',
+                                         'Icy-BR': config['bitrate'], 'Icy-Pub': '0'}
 
         for icy_name, config_name in (('Icy-Name', 'name'), ('Icy-Description', 'description'), ('Icy-Genre', 'genre'),
                                       ('Icy-Url', 'url')):
             if config_name in config and config[config_name]:
-                self._generic_response_headers[icy_name] = config[config_name]
+                self._stream_response_headers[icy_name] = config[config_name]
 
     @property
     def bitrate(self):
@@ -80,8 +84,9 @@ class StreamServer:
 
     @property
     def url_format(self):
+        # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
         return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
-                                                  self._config['path'])
+                                                  self._config['playlist_path'])
 
     #
     # Resource management wrappers
@@ -89,7 +94,8 @@ class StreamServer:
     async def init(self, users):
         self._users = users
         self._app = web.Application(loop=self._loop)
-        self._app.router.add_route('GET', self._config['path'], self._handle_new)
+        self._app.router.add_route('GET', self._config['stream_path'], self._handle_new_stream)
+        self._app.router.add_route('GET', self._config['playlist_path'], self._handle_new_playlist)
         self._handler = self._app.make_handler()
         self._sending_task = self._loop.create_task(self._sending_loop())
 
@@ -169,7 +175,7 @@ class StreamServer:
     #
     # Internal connection handling
     #
-    async def _handle_new(self, request):
+    async def _handle_new_stream(self, request):
         # check for the token validity
         token = request.query_string[6:]
         user = await self._users.get_token_owner(token)
@@ -179,7 +185,7 @@ class StreamServer:
             return response
 
         # assembly the response headers
-        response_headers = self._generic_response_headers.copy()
+        response_headers = self._stream_response_headers.copy()
         meta = False
         if 'icy-metadata' in request.headers and request.headers['icy-metadata'] == '1':
             response_headers['Icy-MetaInt'] = str(self._frame_len)
@@ -208,6 +214,12 @@ class StreamServer:
         with suppress(errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
             await response.write_eof()
 
+        return response
+
+    async def _handle_new_playlist(self, request):
+        # TODO: handle URL encoding
+        body = self._playlist_file.format(request.query_string)
+        response = web.Response(text=body, headers=self._playlist_response_headers)
         return response
 
     async def _sending_loop(self):
