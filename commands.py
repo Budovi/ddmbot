@@ -138,12 +138,14 @@ class CommandHandler:
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def restart(self):
+        await self._message('Restarting...')
         self._restart_scheduled = True
         self._bot.loop.create_task(self._shutdown())
 
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def shutdown(self):
+        await self._message('Shutting down...')
         self._bot.loop.create_task(self._shutdown())
 
     @privileged(True)
@@ -170,11 +172,13 @@ class CommandHandler:
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def stop(self):
+        await self._message('Player stopped')
         await self._player.set_stop()
 
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def djmode(self):
+        await self._message('Player switched to DJ mode')
         await self._player.set_djmode()
 
     @privileged(True)
@@ -228,7 +232,7 @@ class CommandHandler:
         if not self._users.is_listening(int(ctx.message.author.id)):
             raise dec.UserInputError('You must be listening to vote')
         await self._player.skip(int(ctx.message.author.id))
-        await self._log('User {} has voted to skip'.format(ctx.message.author.display_name))
+        await self._log('User {} has voted to skip'.format(ctx.message.author))
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
