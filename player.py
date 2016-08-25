@@ -2,6 +2,7 @@ import audioop
 import asyncio
 import enum
 import errno
+import logging
 import functools
 import os
 import shlex
@@ -12,6 +13,9 @@ from contextlib import suppress
 
 import discord.utils
 import youtube_dl
+
+# set up the logger
+log = logging.getLogger(__name__)
 
 
 class StreamProcessor(threading.Thread):
@@ -313,6 +317,7 @@ class Player:
         return await self._bot.send_message(self._bot.text_channel, message)
 
     async def _update_status(self):
+        log.debug('Waiting for lock from _update_status')
         async with self._transition_lock:
             listeners, djs = await self._users.get_state()
             hypes = self._song_context.get_hype_set() if self.playing else set()
@@ -363,9 +368,11 @@ class Player:
             if message:
                 if self._status_message:
                     self._status_message = await self._bot.edit_message(self._status_message, message)
+                    log.debug("Status message updated")
                 else:
                     self._status_message = await self._message(message)
                     await self._meta_callback(stream_title)
+                    log.debug("New status message created")
 
                     # TODO: messages needs to be unpinned to be pinned (limit of 50 pinned messages)
                     # await self._bot.pin_message(self._status_message)
@@ -443,13 +450,12 @@ class Player:
     # Player FSM
     #
     async def _player_fsm(self):
-        print('FSM init - acquire transition lock')
         await self._transition_lock.acquire()
         while True:
             #
             # Next state switch
             #
-            print('FSM: {} -> {}'.format(self._state, self._next_state))
+            log.debug('FSM: {} -> {}'.format(self._state, self._next_state))
             self._state = self._next_state
 
             #
@@ -535,9 +541,9 @@ class Player:
             #
             self._switch_state.clear()
             self._transition_lock.release()
-            print('FSM: waiting')
+            log.debug('FSM: waiting')
             await self._switch_state.wait()
-            print('FSM: trying to acquire lock')
+            log.debug('FSM: trying to acquire lock')
             await self._transition_lock.acquire()
 
             #
