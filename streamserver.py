@@ -120,11 +120,10 @@ class StreamServer:
     #
     # Player interface
     #
-    async def set_meta(self, song_name, user_name):
+    async def set_meta(self, stream_title):
         # assemble metadata
-        # TODO: magic length constants?
-        metadata = 'StreamTitle:\'{} queued by {}\';StreamURL=\'\';'.format(song_name[:128].replace('\'', '\\\''),
-                                                                            user_name[:64].replace('\'', '\\\''))\
+        # TODO: magic length constant?
+        metadata = 'StreamTitle:\'{}\';StreamURL=\'\';'.format(stream_title[:256].replace('\'', '\\\''))\
             .encode('utf-8', 'ignore')
 
         # now figure out the length of the metadata
