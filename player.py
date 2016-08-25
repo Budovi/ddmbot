@@ -2,6 +2,7 @@ import audioop
 import asyncio
 import enum
 import errno
+import functools
 import os
 import shlex
 import subprocess
@@ -9,10 +10,8 @@ import threading
 import time
 from contextlib import suppress
 
-import discord
-
+import discord.utils
 import youtube_dl
-import functools
 
 
 class StreamProcessor(threading.Thread):
@@ -178,8 +177,6 @@ class Player:
         self._ffmpeg = None
 
         self._status_message = None
-        self._status_channel = None
-
         self._meta_callback = None
         self._voice_client = None
 
@@ -188,10 +185,6 @@ class Player:
     #
     def init(self, bot_voice, aac_server):
         self._voice_client = bot_voice
-        self._status_channel = discord.utils.get(self._bot.get_all_channels(), id=self._config['text_channel'],
-                                                 type=discord.ChannelType.text)
-        if self._status_channel is None:
-            raise RuntimeError('Status text channel specified was not found')
         self._meta_callback = aac_server.set_meta
 
         # TODO: replace protected member access with a method VoiceClient.is_connected()
@@ -310,6 +303,15 @@ class Player:
     #
     # Internally used methods and callbacks
     #
+    async def _whisper(self, user_id, message):
+        user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
+        if user is None:
+            return
+        return await self._bot.send_message(user, message)
+
+    async def _message(self, message):
+        return await self._bot.send_message(self._bot.text_channel, message)
+
     async def _update_status(self):
         async with self._transition_lock:
             listeners, djs = await self._users.get_state()
@@ -350,7 +352,7 @@ class Player:
                 # check for the automatic skip
                 listener_skips = listeners & self._song_context.get_skip_set()
                 if len(listener_skips) / len(listeners) >= self._config_skip_ratio:
-                    await self._bot.send_message(self._status_channel, 'Community voted to skip')
+                    await self._bot.send_message(self._bot.text_channel, 'Community voted to skip')
                     self._switch_state.set()
 
             elif self.streaming:
@@ -362,7 +364,7 @@ class Player:
                 if self._status_message:
                     self._status_message = await self._bot.edit_message(self._status_message, message)
                 else:
-                    self._status_message = await self._bot.send_message(self._status_channel, message)
+                    self._status_message = await self._message(message)
                     await self._meta_callback(stream_title)
 
                     # TODO: messages needs to be unpinned to be pinned (limit of 50 pinned messages)
@@ -396,29 +398,27 @@ class Player:
                 song = await self._songs.get_next_song(dj)
             except LookupError as e:  # no more songs in DJ's playlist
                 await self._users.leave_queue(dj)
-                await self._bot.send_message(self._status_channel, '<@{}>, your playlist is empty, please add more'
-                                                                   ' songs and rejoin the queue'.format(dj))
+                await self._whisper(dj, 'Your playlist is empty. Please add more songs and rejoin the DJ queue.')
                 return None
             except ValueError as e:  # there was a problem playing the song
-                await self._bot.send_message(self._status_channel, 'Skipped: {}'.format(str(e)))
+                await self._message('Song skipped: {}'.format(str(e)))
                 continue
             return song
         await self._users.leave_queue(dj)
-        await self._bot.send_message(self._status_channel, '<@{}>, please try to fix your playlist and rejoin the queue'
-                                     .format(dj))
+        await self._whisper(dj, 'Please try to fix your playlist and rejoin the queue')
         return None
 
     async def _get_stream_info(self):
         func = functools.partial(self._ytdl.extract_info, self._stream_url, download=False)
         try:
             info = await self._bot.loop.run_in_executor(None, func)
-        except youtube_dl.DownloadError:
-            await self._bot.send_message(self._status_channel, 'Failed to download stream information')
+        except youtube_dl.DownloadError as e:
+            await self._message('Failed to obtain stream information: {}'.format(str(e)))
             return False
         if self._stream_name is None:
             self._stream_name = info['title'] if len(info['title']) > 0 else '<untitled>'
         if 'url' not in info:
-            await self._bot.send_message(self._status_channel, 'Failed to get stream URL')
+            await self._message('Failed to extract stream URL, is the link valid?')
             return False
         self._stream_url = info['url']
         return True

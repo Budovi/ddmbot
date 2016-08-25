@@ -1,8 +1,11 @@
 import asyncio
-from datetime import datetime
+import logging
 
 import discord.ext.commands as dec
 import discord
+
+# set up the logger
+log = logging.getLogger(__name__)
 
 
 #
@@ -43,8 +46,6 @@ class CommandHandler:
         self.ignorelist_load()
         self._restart_scheduled = False
 
-        self._cmd_channel = None
-        self._log_channel = None
         self._operator_role = None
 
     @property
@@ -55,15 +56,6 @@ class CommandHandler:
     # Initialization
     #
     def init(self):
-        self._cmd_channel = discord.utils.get(self._bot.get_all_channels(), id=self._config['cmd_channel'],
-                                              type=discord.ChannelType.text)
-        if self._cmd_channel is None:
-            raise RuntimeError('Command text channel specified was not found')
-        self._log_channel = discord.utils.get(self._bot.get_all_channels(), id=self._config['log_channel'],
-                                              type=discord.ChannelType.text)
-        if self._log_channel is None:
-            raise RuntimeError('Logging text channel specified was not found')
-
         def get_all_roles():
             for server in self._bot.servers:
                 for role in server.roles:
@@ -84,7 +76,7 @@ class CommandHandler:
         # check ignore list and membership
         if ctx.message.author.id in self._ignorelist:
             return False
-        if ctx.message.author not in self._cmd_channel.server.members:
+        if ctx.message.author not in self._bot.text_channel.server.members:
             return False
 
         # if the channel is not private, delete the command immediately regardless of the response
@@ -96,9 +88,9 @@ class CommandHandler:
         if not hasattr(ctx.command, 'privileged'):
             return True  # This is a command outside of our control
         if ctx.command.privileged:
-            if ctx.message.channel != self._cmd_channel:
+            if ctx.message.channel != self._bot.text_channel:
                 raise InvalidChannel('Privileged commands must be used inside the {} channel'
-                                     .format(self._cmd_channel.mention))
+                                     .format(self._bot.text_channel.mention))
             if self._operator_role not in ctx.message.author.roles:
                 raise NotAuthorized('You don\'t have a permission to use the *{}* command.'
                                     .format(ctx.command))
@@ -115,17 +107,30 @@ class CommandHandler:
             await self._bot.send_message(ctx.message.author, str(exception))
             return
 
-        if not isinstance(exception, dec.CheckFailure):
+        if isinstance(exception, dec.CheckFailure):
+            return
+
+        if isinstance(exception, dec.CommandNotFound):
+            # non-existing commands won't trigger __check thus are not deleted
+            await self._bot.delete_message(ctx.message)
+
+        if isinstance(exception, dec.CommandError):
+            if isinstance(exception, dec.CommandInvokeError):
+                exception = exception.__cause__
             if hasattr(ctx.command, 'privileged') and ctx.command.privileged:
-                await self._bot.send_message(self._cmd_channel, '{}, {}'.format(ctx.message.author.mention,
-                                                                                str(exception)))
+                await self._message('{}, {}'.format(ctx.message.author.mention, str(exception)))
             else:
                 await self._bot.send_message(ctx.message.author, str(exception))
 
     async def _command_completion(self, command, ctx):
         if hasattr(ctx.command, 'privileged') and command.privileged:
-            await self._log('Operator {} has used the *{}* command with the following arguments:\n{}'
+            log.info('Operator {} has used the {} command with the following arguments: {}'
+                     .format(ctx.message.author, command, ctx.kwargs))
+            await self._log('Operator {} has used the *{}* command with the following arguments: {}'
                             .format(ctx.message.author, command, ctx.kwargs))
+        else:
+            log.debug('User {} has used the {} command with the following arguments: {}'
+                      .format(ctx.message.author, command, ctx.kwargs))
 
     #
     # General bot commands
@@ -145,21 +150,19 @@ class CommandHandler:
     @dec.command(ignore_extra=False)
     async def ignore(self, member: discord.Member):
         if self._operator_role in member.roles:
-            await self._bot.reply('User {} is an operator and cannot be ignored'.format(member.display_name))
-            return
+            raise dec.UserInputError('User {} is an operator and cannot be ignored'.format(member.display_name))
 
         self._ignorelist.add(member.id)
-        await self._bot.reply('User {} has been added to the ignore list'.format(member.display_name))
+        await self._message('User {} has been added to the ignore list'.format(member.display_name))
 
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def unignore(self, member: discord.Member):
         if member.id not in self._ignorelist:
-            await self._bot.reply('User {} is not on the ignore list'.format(member.display_name))
-            return
+            raise dec.UserInputError('User {} is not on the ignore list'.format(member.display_name))
 
         self._ignorelist.remove(member.id)
-        await self._bot.reply('User {} successfully removed from the ignore list'.format(member.display_name))
+        await self._message('User {} successfully removed from the ignore list'.format(member.display_name))
 
     #
     # Player controls
@@ -205,7 +208,7 @@ class CommandHandler:
     async def kick(self, member: discord.Member):
         try:
             await self._users.leave_queue(int(member.id))
-            await self._bot.reply('User {} was removed from the DJ queue'.format(member.display_name))
+            await self._message('User {} was removed from the DJ queue'.format(member.display_name))
         except ValueError:
             raise dec.UserInputError('User {} is not in the DJ queue'.format(member.display_name))
 
@@ -216,14 +219,14 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False)
     async def hype(self, ctx):
         if not self._users.is_listening(int(ctx.message.author.id)):
-            raise dec.BadArgument('You must be listening to vote')
+            raise dec.UserInputError('You must be listening to vote')
         await self._player.hype(int(ctx.message.author.id))
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
     async def skip(self, ctx):
         if not self._users.is_listening(int(ctx.message.author.id)):
-            raise dec.BadArgument('You must be listening to vote')
+            raise dec.UserInputError('You must be listening to vote')
         await self._player.skip(int(ctx.message.author.id))
         await self._log('User {} has voted to skip'.format(ctx.message.author.display_name))
 
@@ -336,8 +339,11 @@ class CommandHandler:
     #
     # Helper methods
     #
-    async def _log(self, text):
-        await self._bot.send_message(self._log_channel, '{} | {}'.format(str(datetime.utcnow()), text))
+    async def _message(self, message):
+        return await self._bot.send_message(self._bot.text_channel, message)
+
+    async def _log(self, message):
+        return await self._bot.send_message(self._bot.log_channel, message)
 
     async def _shutdown(self):
         await asyncio.sleep(2)

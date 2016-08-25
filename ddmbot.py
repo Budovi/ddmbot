@@ -1,8 +1,10 @@
 import asyncio
 import configparser
-import fcntl
+import logging
 import os
+import time
 from contextlib import suppress
+from logging.handlers import TimedRotatingFileHandler
 
 import discord
 import discord.ext.commands as dec
@@ -13,45 +15,95 @@ import songmanager
 import streamserver
 import usermanager
 
+# set up a logger
+logging.Formatter.converter = time.gmtime
+log = logging.Logger(__name__, logging.INFO)
+stderr_logger = logging.StreamHandler()
+stderr_logger.setFormatter(logging.Formatter('{asctime} | {levelname:<8} {message}', '%Y-%m-%d %H:%M:%S', style='{'))
+log.addHandler(stderr_logger)
 
 if not discord.opus.is_loaded():
     discord.opus.load_opus('opus')
 
-
+# synchronization primitives to ensure initialization is performed only once
 post_init_lock = asyncio.Lock()
 post_init_done = False
 
 async def on_ready():
-    print('Logged in as:\n{0} (ID: {0.id})'.format(ddmbot.user))
+    log.info('Logged in as: {0} (ID: {0.id})'.format(ddmbot.user))
 
     global post_init_done
     async with post_init_lock:
         if not post_init_done:
             post_init_done = True
-            print('Initializing the command handler')
+
+            # first off, locate the configured channels
+            ddmbot.text_channel = discord.utils.get(ddmbot.get_all_channels(), id=config['general']['text_channel'],
+                                                    type=discord.ChannelType.text)
+            ddmbot.log_channel = discord.utils.get(ddmbot.get_all_channels(), id=config['general']['log_channel'],
+                                                   type=discord.ChannelType.text)
+            ddmbot.voice_channel = discord.utils.get(ddmbot.get_all_channels(), id=config['general']['voice_channel'],
+                                                     type=discord.ChannelType.voice)
+
+            # check if we got everything
+            if ddmbot.text_channel is None:
+                raise RuntimeError('Specified text channel could not be found')
+            if ddmbot.log_channel is None:
+                raise RuntimeError('Specified logging channel could not be found')
+            if ddmbot.voice_channel is None:
+                raise RuntimeError('Specified voice channel could not be found')
+
+            # check for multiple servers and if we have permissions needed
+            text_permissions = ddmbot.text_channel.permissions_for(ddmbot.text_channel.server.me)
+            if not text_permissions.send_messages:
+                raise RuntimeError('Bot does not have a permission to send messages in the text channel')
+            if not text_permissions.read_messages:
+                raise RuntimeError('Bot does not have a permission to read messages in the text channel')
+            if not text_permissions.manage_messages:
+                raise RuntimeError('Bot does not have a permission to manage messages in the text channel')
+            if not ddmbot.log_channel.permissions_for(ddmbot.log_channel.server.me).send_messages:
+                raise RuntimeError('Bot does not have a permission to send messages in the logging channel')
+            voice_permissions = ddmbot.voice_channel.permissions_for(ddmbot.voice_channel.server.me)
+            if not voice_permissions.connect:
+                raise RuntimeError('Bot does not have a permission to connect to the voice channel')
+            if not voice_permissions.speak:
+                raise RuntimeError('Bot does not have a permission to speak in the voice channel')
+            if len(ddmbot.servers) > 1:
+                log.warning('Bot is connected to multiple servers. Users who are not members of a server with the '
+                            'text channel used will be ignored.')
+
+            log.info('Initializing user manager')
+            users.init()
+            # populate user manager with existing listeners
+            for member in ddmbot.voice_channel.voice_members:
+                if not member.voice.self_deaf:
+                    await users.add_listener(int(member.id))
+
+            log.info('Initializing command handler')
             command_handler.init()
 
-            print('Initializing the player')
-            # get the Channel to connect to
-            voice_channel = discord.utils.get(ddmbot.get_all_channels(), id=config['general']['voice_channel'],
-                                              type=discord.ChannelType.voice)
-            if voice_channel is None:
-                raise RuntimeError('Specified voice channel not found')
+            log.info('Connecting to the voice channel')
             # obtain VoiceClient and initialize Player
-            voice_client = await ddmbot.join_voice_channel(voice_channel)
-            player.init(voice_client, stream)
-            print('Initialization done')
+            voice_client = await ddmbot.join_voice_channel(ddmbot.voice_channel)
 
+            log.info('Initializing player')
+            player.init(voice_client, stream)
+
+            await ddmbot.send_message(ddmbot.text_channel, 'DdmBot ready')
+            log.info('Initialization done')
         else:
-            print('Warning: on_ready called again')
+            log.warning('on_ready callback called again, initialization skipped')
+
 
 async def on_message(message):
     # author of the message wrote something, which is kinda a proof (s)he is alive
     await users.refresh_activity(int(message.author.id))
     await ddmbot.process_commands(message)
 
+
 async def on_error(event, *args, **kwargs):
     raise
+
 
 async def on_voice_state_update(before, after):
     voice_client = player.voice_client
@@ -68,10 +120,10 @@ async def on_voice_state_update(before, after):
     # leaving
     elif (before.voice.voice_channel == channel and not before.voice.self_deaf) and \
             (after.voice.voice_channel != channel or after.voice.self_deaf):
-        try: # TODO better initial state handling
+        try:
             await users.remove_listener(int(after.id))
         except ValueError:
-            pass
+            log.warning('Tried to remove non-existing listener in on_voice_update')
 
 
 if __name__ == '__main__':
@@ -84,6 +136,13 @@ if __name__ == '__main__':
             # parse input settings
             config = configparser.ConfigParser(default_section='general')
             config.read('config.ini')
+
+            # add new handler to the logger
+            file_logger = TimedRotatingFileHandler(config['general']['log_filename'], when='midnight', backupCount=3,
+                                                   utc=True)
+            file_logger.setFormatter(logging.Formatter('{asctime} | {name:<20} | {levelname:<8} {message}',
+                                                       '%Y-%m-%d %H:%M:%S', style='{'))
+            log.addHandler(file_logger)
 
             # create named pipes (FIFOs)
             with suppress(OSError):
@@ -107,12 +166,11 @@ if __name__ == '__main__':
             command_handler = commands.CommandHandler(config['commands'], ddmbot, users, songs, player)
 
             try:
-                # SongManager and UserManager can be initialized straight away
+                # SongManager can be initialized straight away
+                # Other objects are initialized when the bot is connected
                 songs.init()
-                users.init()
                 # StreamServer needs to be started
                 ddmbot.loop.run_until_complete(stream.init(users))
-                # Player needs to be initialized after the voice connection is made
 
                 # ddmbot.start command is blocking
                 ddmbot.loop.run_until_complete(ddmbot.start(config['general']['token']))
@@ -142,5 +200,4 @@ if __name__ == '__main__':
                 asyncio.set_event_loop(asyncio.new_event_loop())
 
     except Exception as e:
-        pass # TODO: logger
-        raise
+        log.critical('DdmBot crashed with an exception', exc_info=True)
