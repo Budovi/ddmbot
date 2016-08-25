@@ -5,7 +5,7 @@ import discord.ext.commands as dec
 import discord
 
 # set up the logger
-log = logging.getLogger(__name__)
+log = logging.getLogger('ddmbot.commands')
 
 
 #

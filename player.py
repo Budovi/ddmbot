@@ -15,7 +15,7 @@ import discord.utils
 import youtube_dl
 
 # set up the logger
-log = logging.getLogger(__name__)
+log = logging.getLogger('ddmbot.player')
 
 
 class StreamProcessor(threading.Thread):

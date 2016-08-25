@@ -17,7 +17,8 @@ import usermanager
 
 # set up a logger
 logging.Formatter.converter = time.gmtime
-log = logging.Logger(__name__, logging.INFO)
+log = logging.getLogger('ddmbot')
+log.setLevel(logging.INFO)
 stderr_logger = logging.StreamHandler()
 stderr_logger.setFormatter(logging.Formatter('{asctime} | {levelname:<8} {message}', '%Y-%m-%d %H:%M:%S', style='{'))
 log.addHandler(stderr_logger)

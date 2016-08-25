@@ -5,8 +5,6 @@ import random
 import re
 from contextlib import suppress
 
-import traceback
-
 import peewee
 import youtube_dl
 

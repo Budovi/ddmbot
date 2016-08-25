@@ -9,7 +9,7 @@ from contextlib import suppress
 import discord.utils
 
 # set up the logger
-log = logging.getLogger(__name__)
+log = logging.getLogger('ddmbot.usermanager')
 
 
 class UserManager:
@@ -62,7 +62,7 @@ class UserManager:
         async with self._lock:
             # check if token is valid
             if token not in self._tokens:
-                log.debug('Token {} verification failed')
+                log.debug('Token {} verification failed'.format(token))
                 return None
             timestamp, user = self._tokens[token]
             # only one connection is possible at the time
