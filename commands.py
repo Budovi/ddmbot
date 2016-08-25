@@ -236,9 +236,9 @@ class CommandHandler:
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
-    async def hqsound(self, ctx):
+    async def direct(self, ctx):
         url = await self._users.generate_url(int(ctx.message.author.id))
-        await self._bot.whisper('Direct link: {}\nPlease note that this link will expire in a few minutes. Also, you '
+        await self._bot.whisper('Direct link: `{}`\nPlease note that this link will expire in a few minutes. Also, you '
                                 'can only be connected from a single location, including a discord voice channel. If '
                                 'you are connected already, please disconnect before following the link.'.format(url))
 
