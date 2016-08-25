@@ -135,7 +135,8 @@ class SongManager:
         self._config_op_credit_renew = datetime.timedelta(hours=int(config['op_credit_renew']))
         self._loop = loop
 
-        self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True})
+        self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
+                                           'no_color': True})
         self._database = database
         self._database.init(config['db_file'])
 

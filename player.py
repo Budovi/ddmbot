@@ -162,7 +162,8 @@ class Player:
 
         self._song_context = None
 
-        self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True})
+        self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
+                                           'no_color': True})
         self._stream_url = None
         self._stream_name = None
 
