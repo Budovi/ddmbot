@@ -70,6 +70,7 @@ class PcmProcessor(StreamProcessor):
                 data = os.read(self._pipe_fd, self._frame_len)
             except OSError as e:
                 if e.errno == errno.EAGAIN:
+                    log.warning('PcmProcessor: Buffer not ready')
                     data = ''
                 else:
                     raise
@@ -87,6 +88,7 @@ class PcmProcessor(StreamProcessor):
                 if self._connected.is_set():
                     # we have at least some data, let's send them
                     if len(data) != self._frame_len:
+                        log.debug('PcmProcessor: Buffer has been padded with zeroes')
                         data.ljust(self._frame_len, b'\0')
                     self._play(data)
 
@@ -118,12 +120,15 @@ class AacProcessor(StreamProcessor):
                 data = os.read(self._pipe_fd, data_requested)
             except OSError as e:
                 if e.errno == errno.EAGAIN:
+                    log.warning('AacProcessor: Buffer not ready')
                     data = ''
                 else:
                     raise
 
             data_len = len(data)
             if data_len != 0:
+                if data_len != self._frame_len:
+                    log.debug('AacProcessor: Sending partial buffer of size {}'.format(data_len))
                 # we cannot align the data with zeroes, so send what we've got
                 self._play(data)
 
