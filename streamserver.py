@@ -1,6 +1,10 @@
 import asyncio
+import logging
 from aiohttp import web, errors
 from contextlib import suppress
+
+# set up the logger
+log = logging.getLogger('ddmbot.streamserver')
 
 
 class ConnectionInfo:
@@ -129,8 +133,7 @@ class StreamServer:
     async def set_meta(self, stream_title):
         # assemble metadata
         # TODO: magic length constant?
-        metadata = 'StreamTitle:\'{}\';StreamURL=\'\';'.format(stream_title[:256].replace('\'', '\\\''))\
-            .encode('utf-8', 'ignore')
+        metadata = 'StreamTitle=\'{}\';'.format(stream_title[:256].replace('\'', '\\\'')).encode('utf-8', 'ignore')
 
         # now figure out the length of the metadata
         length = len(metadata) // 16
@@ -141,10 +144,11 @@ class StreamServer:
             raise RuntimeError('Metadata too long')
 
         # prepend the length and pad with zeroes
-        metadata = bytes([length]) + metadata.rjust(length * 16, b'\0')
+        metadata = bytes([length]) + metadata.ljust(length * 16, b'\0')
 
         # atomically update the metadata
         async with self._lock:
+            log.debug('New metadata set: {}'.format(metadata))
             self._current_meta = metadata
             self._meta_changed = True
 
@@ -191,6 +195,7 @@ class StreamServer:
             response_headers['Icy-MetaInt'] = str(self._frame_len)
             meta = True
 
+        log.debug('New stream request from {}, ICY-METADATA={}'.format(user, meta))
         # create response StreamResponse object
         response = web.StreamResponse(headers=response_headers)
         await response.prepare(request)
@@ -214,10 +219,12 @@ class StreamServer:
         with suppress(errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
             await response.write_eof()
 
+        log.debug('Stream to {} terminated'.format(user))
         return response
 
     async def _handle_new_playlist(self, request):
         # TODO: handle URL encoding
+        log.debug('New playlist request, query string: {}'.format(request.query_string))
         body = self._playlist_file.format(request.query_string)
         response = web.Response(text=body, headers=self._playlist_response_headers)
         return response
@@ -236,6 +243,7 @@ class StreamServer:
                         init = connection.first_send
                         # send data, if the connection is a new one whole frame (part) must be sent
                         if init:
+                            log.debug('Sending initial frame to {}'.format(user))
                             connection.response.write(self._current_frame)
                         else:
                             connection.response.write(self._current_data)
@@ -243,8 +251,10 @@ class StreamServer:
                         # now, if the frame is complete, append the metadata
                         if connection.meta and len(self._current_frame) == self._frame_len:
                             if init or self._meta_changed:
+                                log.debug('Sending metadata to {}'.format(user))
                                 connection.response.write(self._current_meta)
                             else:
+                                log.debug('Sending empty metadata to {}'.format(user))
                                 connection.response.write(b'\0')
                         # call that actually rises any exceptions on a broken connection
                         # TODO: get rid of this coroutine somehow?
