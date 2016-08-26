@@ -263,7 +263,8 @@ class StreamServer:
                         disconnected.append(user)
                         connection.terminate()
                 # clear meta flag
-                self._meta_changed = False
+                if len(self._current_frame) == self._frame_len:
+                    self._meta_changed = False
                 # remove all the disconnected clients
                 for user in disconnected:
                     self._connections.pop(user)
