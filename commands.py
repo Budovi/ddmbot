@@ -110,7 +110,7 @@ class CommandHandler:
         if isinstance(exception, dec.CheckFailure):
             return
 
-        if isinstance(exception, dec.CommandNotFound):
+        if isinstance(exception, dec.CommandNotFound) and not isinstance(ctx.message.channel, discord.PrivateChannel):
             # non-existing commands won't trigger __check thus are not deleted
             await self._bot.delete_message(ctx.message)
 
