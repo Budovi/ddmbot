@@ -128,6 +128,8 @@ class UserManager:
         async with self._lock:
             if discord_id not in self._listeners:
                 raise ValueError('User is not listening')
+            if discord_id in self._queue:
+                return
             self._queue.append(discord_id)
 
             if len(self._queue) == 1:
