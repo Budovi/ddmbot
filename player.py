@@ -294,7 +294,7 @@ class Player:
                     self._bot.loop.create_task(self._update_status())
             except ValueError:
                 # skipped by the user playing
-                await self._bot.say('Song skipped by the DJ')
+                await self._message('Song skipped by the DJ')
                 self._switch_state.set()
 
     async def force_skip(self):
