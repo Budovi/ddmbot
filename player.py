@@ -203,7 +203,7 @@ class Player:
 
         self._ffmpeg_command = 'ffmpeg -loglevel error -i {{}} -y -vn' \
                                ' -f s16le -ar {} -ac {} {}' \
-                               ' -f adts -ac 2 -c:a libfdk_aac -b:a {}k {}' \
+                               ' -f adts -ar 48000 -ac 2 -c:a libfdk_aac -b:a {}k {}' \
             .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['pcm_pipe']),
                     aac_server.bitrate // 1000, shlex.quote(self._config['aac_pipe']))
         self._player_task = self._bot.loop.create_task(self._player_fsm())
