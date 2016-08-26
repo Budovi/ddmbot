@@ -187,7 +187,7 @@ class StreamServer:
         # assembly the response headers
         response_headers = self._stream_response_headers.copy()
         meta = False
-        if 'icy-metadata' in request.headers and request.headers['icy-metadata'] == '1':
+        if 'ICY-METADATA' in request.headers and request.headers['ICY-METADATA'] == '1':
             response_headers['Icy-MetaInt'] = str(self._frame_len)
             meta = True
 
