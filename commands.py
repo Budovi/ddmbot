@@ -295,10 +295,10 @@ class CommandHandler:
             if start == 1:
                 await self._bot.whisper('Your playlist is empty')
             else:
-                await self._bot.whisper('You don\'t have any songs in your playlist starting from {}'
+                await self._bot.whisper('You don\'t have any songs in your playlist starting from the {}'
                                         .format(ordinal(start)))
             return
-        reply = '**20 songs from your playlist, starting from {}:**\n **>** '.format(ordinal(start)) + \
+        reply = '**20 songs from your playlist, starting from the {}:**\n **>** '.format(ordinal(start)) + \
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 

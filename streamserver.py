@@ -219,6 +219,10 @@ class StreamServer:
         with suppress(errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
             await response.write_eof()
 
+        # notify the UserManager again, this time the listener have left TODO: is suppress necessary?
+        with suppress(ValueError):
+            await self._users.remove_listener(user)
+
         log.debug('Stream to {} terminated'.format(user))
         return response
 
@@ -271,7 +275,3 @@ class StreamServer:
 
             # clear the flag for the next iteration
             self._data_event.clear()
-
-            # and finally, notify UserManager if some users have left
-            for user in disconnected:
-                await self._users.remove_listener(user)

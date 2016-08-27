@@ -551,6 +551,8 @@ class Player:
                 # we need to actually wait for this to ensure proper functionality of overplaying protection
                 await self._songs.update_stats(self._song_context)
                 self._song_context = None
+            elif self.streaming:
+                await self._message('Stream has been interrupted')
 
             # kill ffmpeg if still running
             if self._ffmpeg is not None and self._ffmpeg.poll() is None:
