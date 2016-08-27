@@ -124,14 +124,18 @@ class CommandHandler:
                 await self._bot.send_message(ctx.message.author, str(exception))
 
     async def _command_completion(self, command, ctx):
+        arg_start = 2 if command.pass_context else 1
         if hasattr(ctx.command, 'privileged') and command.privileged:
-            log.info('Operator {} has used the {} command with the following arguments: {}'
-                     .format(ctx.message.author, command, ctx.kwargs))
-            await self._log('Operator {} has used the *{}* command with the following arguments: {}'
-                            .format(ctx.message.author, command, ctx.kwargs))
+            log.info('Operator {} has used the {} command with the following arguments: [{}]\n{}'
+                     .format(ctx.message.author, command, ', '.join([str(arg) for arg in ctx.args[arg_start:]]),
+                             ctx.message.content))
+            await self._log('Operator {} has used the *{}* command with the following arguments: [{}]\n`{}`'
+                            .format(ctx.message.author, command, ', '.join([str(arg) for arg in ctx.args[arg_start:]]),
+                                    ctx.message.content))
         else:
-            log.debug('User {} has used the {} command with the following arguments: {}'
-                      .format(ctx.message.author, command, ctx.kwargs))
+            log.debug('User {} has used the {} command with the following arguments: [{}]\n{}'
+                      .format(ctx.message.author, command, ', '.join([str(arg) for arg in ctx.args[arg_start:]]),
+                              ctx.message.content))
 
     #
     # General bot commands
