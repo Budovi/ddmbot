@@ -89,6 +89,9 @@ async def on_ready():
             # obtain VoiceClient and initialize Player
             voice_client = await ddmbot.join_voice_channel(ddmbot.voice_channel)
 
+            log.info('Initializing direct stream server')
+            await stream.init(users, voice_client)
+
             log.info('Initializing player')
             player.init(voice_client, stream)
 
@@ -149,7 +152,9 @@ if __name__ == '__main__':
 
             # create named pipes (FIFOs)
             with suppress(OSError):
-                os.mkfifo(config['player']['aac_pipe'], mode=0o600)
+                os.mkfifo(config['stream_server']['aac_pipe'], mode=0o600)
+            with suppress(OSError):
+                os.mkfifo(config['stream_server']['int_pipe'], mode=0o600)
             with suppress(OSError):
                 os.mkfifo(config['player']['pcm_pipe'], mode=0o600)
 
@@ -172,8 +177,6 @@ if __name__ == '__main__':
                 # SongManager can be initialized straight away
                 # Other objects are initialized when the bot is connected
                 songs.init()
-                # StreamServer needs to be started
-                ddmbot.loop.run_until_complete(stream.init(users))
 
                 # ddmbot.start command is blocking
                 ddmbot.loop.run_until_complete(ddmbot.start(config['general']['token']))

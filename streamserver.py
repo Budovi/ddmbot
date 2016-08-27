@@ -1,19 +1,93 @@
 import asyncio
+import errno
 import logging
+import os
+import shlex
+import subprocess
+import threading
+import time
 from aiohttp import web, errors
-from contextlib import suppress
+
+import awaitablelock
 
 # set up the logger
 log = logging.getLogger('ddmbot.streamserver')
 
 
+class AacProcessor(threading.Thread):
+    def __init__(self, pipe_path, frame_len, bitrate, output_callback):
+        if not callable(output_callback):
+            raise TypeError('Output callback must be a callable object')
+
+        super().__init__()
+
+        self._pipe_fd = os.open(pipe_path, os.O_RDONLY | os.O_NONBLOCK)
+
+        self._frame_len = frame_len
+        self._frame_period = frame_len * 8 / bitrate
+
+        self._play = output_callback
+
+        self._end = threading.Event()
+
+    def stop(self):
+        self._end.set()
+        self.join()
+        self.flush()
+        os.close(self._pipe_fd)
+
+    def flush(self):
+        try:
+            os.read(self._pipe_fd, 1048576)
+        except OSError as e:
+            if e.errno != errno.EAGAIN:
+                raise
+
+    def run(self):
+        loops = 0  # loop counter
+        data_requested = self._frame_len  # to keep the alignment intact
+
+        # capture the starting time
+        start_time = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
+        while not self._end.is_set():
+            # increment loop counter
+            loops += 1
+
+            # try to read a frame from the input -- should be there all the time
+            try:
+                data = os.read(self._pipe_fd, data_requested)
+
+                # so we apparently got some data
+                data_len = len(data)
+                if data_len != self._frame_len:
+                    log.warning('AacProcessor: Got partial buffer of size {}'.format(data_len))
+
+                # call the callback
+                self._play(data)
+
+                # calculate requested size for the next iteration
+                data_requested -= data_len
+                if data_requested == 0:
+                    data_requested = self._frame_len
+            except OSError as e:
+                if e.errno == errno.EAGAIN:
+                    log.warning('AacProcessor: Buffer not ready')
+                else:
+                    raise
+
+            # calculate next transmission time
+            next_time = start_time + self._frame_period * loops
+            sleep_time = max(0, self._frame_period + (next_time - time.clock_gettime(time.CLOCK_MONOTONIC_RAW)))
+            time.sleep(sleep_time)
+
+
 class ConnectionInfo:
-    __slots__ = ['_response', '_meta', '_lock', '_init']
+    __slots__ = ['_response', '_meta', '_event', '_init']
 
     def __init__(self, response: web.StreamResponse, meta: bool, loop: asyncio.AbstractEventLoop):
         self._response = response
         self._meta = meta
-        self._lock = asyncio.Lock(loop=loop)
+        self._event = asyncio.Event(loop=loop)
         self._init = True
 
     @property
@@ -31,15 +105,11 @@ class ConnectionInfo:
             return True
         return False
 
-    async def prepare(self):
-        if not self._lock.locked():
-            await self._lock.acquire()
-
     async def wait(self):
-        await self._lock.acquire()
+        await self._event.wait()
 
     def terminate(self):
-        self._lock.release()
+        self._event.set()
 
 
 class StreamServer:
@@ -53,22 +123,27 @@ class StreamServer:
         self._app = None
         self._server = None
         self._handler = None
-        self._sending_task = None
 
-        self._data_event = asyncio.Event(loop=loop)
+        self._lock = awaitablelock.AwaitableLock(loop=loop)
+        # user -> ConnectionInfo
+        self._connections = dict()
+
+        self._aac_thread = None
+        self._cleanup_task = None
+        self._internal_pipe = os.open(config['int_pipe'], os.O_RDONLY | os.O_NONBLOCK)
+        self._ffmpeg = None
+        self._ffmpeg_args = None
+        self._connected = threading.Event()
+
         self._current_frame = b''
-        self._current_data = b''
         self._meta_changed = False
         self._current_meta = b'\0'
 
-        self._lock = asyncio.Lock(loop=loop)
-        # user -> (response, meta, init)
-        self._connections = dict()
-
-        self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{}\r\nhttp://{}:{}{}?{{}}'\
-            .format(config['name'], config['hostname'], config['port'], config['stream_path'])
+        # response headers and payload assembly
         self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot v:0.1 alpha', 'Content-type':
                                            'audio/mpegurl'}
+        self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{}\r\nhttp://{}:{}{}?{{}}'\
+            .format(config['name'], config['hostname'], config['port'], config['stream_path'])
         self._stream_response_headers = {'Cache-Control': 'no-cache', 'Connection': 'close', 'Pragma': 'no-cache',
                                          'Server': 'DdmBot v:0.1 alpha', 'Content-Type': 'audio/aac',
                                          'Icy-BR': config['bitrate'], 'Icy-Pub': '0'}
@@ -79,14 +154,6 @@ class StreamServer:
                 self._stream_response_headers[icy_name] = config[config_name]
 
     @property
-    def bitrate(self):
-        return self._config_bitrate * 1000
-
-    @property
-    def frame_len(self):
-        return self._frame_len
-
-    @property
     def url_format(self):
         # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
         return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
@@ -95,22 +162,24 @@ class StreamServer:
     #
     # Resource management wrappers
     #
-    async def init(self, users):
+    async def init(self, users, bot_voice):
         self._users = users
+        ffmpeg_command = 'ffmpeg -loglevel error -y -f s16le -ar {} -ac {} -i {}' \
+                         ' -f adts -c:a libfdk_aac -b:a {}k {}' \
+            .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['int_pipe']),
+                    self._config_bitrate, shlex.quote(self._config['aac_pipe']))
+        self._ffmpeg_args = shlex.split(ffmpeg_command)
+
+        # http server initialization
         self._app = web.Application(loop=self._loop)
         self._app.router.add_route('GET', self._config['stream_path'], self._handle_new_stream)
         self._app.router.add_route('GET', self._config['playlist_path'], self._handle_new_playlist)
         self._handler = self._app.make_handler()
-        self._sending_task = self._loop.create_task(self._sending_loop())
 
         self._server = await self._loop.create_server(self._handler, self._config['ip_address'],
                                                       int(self._config['port']))
 
     async def cleanup(self):
-        if self._sending_task is not None:
-            self._sending_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._sending_task
         if self._server is not None:
             # stop listening on the socket
             self._server.close()
@@ -130,6 +199,14 @@ class StreamServer:
     #
     # Player interface
     #
+    @property
+    def internal_pipe_path(self):
+        return self._config['int_pipe']
+
+    @property
+    def connected(self):
+        return self._connected
+
     async def set_meta(self, stream_title):
         # assemble metadata
         # TODO: magic length constant?
@@ -151,20 +228,6 @@ class StreamServer:
             log.debug('New metadata set: {}'.format(metadata))
             self._current_meta = metadata
             self._meta_changed = True
-
-    def play_audio(self, data):
-        # TODO: eh... thread safety?
-        if self._data_event.is_set():
-            # this is not good... previous data has not processed yet
-            raise RuntimeError('StreamServer is stalled')
-
-        self._current_data = data
-
-        # we rely on the fact that this method is called on the frame boundaries (at least)
-        self._current_frame = data if len(self._current_frame) == self._frame_len else self._current_frame + data
-
-        # last thing to do is to notify the sending loop, safely
-        self._loop.call_soon_threadsafe(self._data_event.set)
 
     #
     # UserManager interface
@@ -196,32 +259,54 @@ class StreamServer:
             meta = True
 
         log.debug('New stream request from {}, ICY-METADATA={}'.format(user, meta))
+
         # create response StreamResponse object
         response = web.StreamResponse(headers=response_headers)
         await response.prepare(request)
         # construct ConnectionInfo object
         connection = ConnectionInfo(response, meta, self._loop)
-        await connection.prepare()
-        # critical section - we are manipulating connections
+
+        # critical section -- we are manipulating the connections
         async with self._lock:
-            if user in self._connections:
+            if len(self._connections) == 0:
+                # first listener needs to initialize everything
+                log.debug('First listener initialization')
+                # spawn cleanup task
+                self._cleanup_task = self._loop.create_task(self._cleanup_loop())
+                # spawn ffmpeg process
+                #args = shlex.split(self._ffmpeg_command.format(shlex.quote(url)))
+                try:
+                    self._ffmpeg = subprocess.Popen(self._ffmpeg_args)
+                except FileNotFoundError as e:
+                    raise RuntimeError('ffmpeg executable was not found') from e
+                except subprocess.SubprocessError as e:
+                    raise RuntimeError('Popen failed: {0.__name__} {1}'.format(type(e), str(e))) from e
+                # create processing thread
+                self._aac_thread = AacProcessor(self._config['aac_pipe'], self._frame_len, self._config_bitrate * 1000,
+                                                self._play_audio)
+                # enable input and output
+                self._connected.set()
+                self._aac_thread.start()
+
+            elif user in self._connections:
                 # break the existing connection
                 self._connections[user].terminate()
+
+            # add the connection object to the _connections dictionary
             self._connections[user] = connection
+
         # notify the UserManager that a new listener was added
         # race condition is possible, but only one of the connections will be served
         await self._users.add_listener(user, token)
 
         # wait before terminating
+        log.debug('Waiting for the client termination')
         await connection.wait()
 
-        # now we are supposed to break the connection, do it explicitly before returning
-        with suppress(errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
-            await response.write_eof()
-
-        # notify the UserManager again, this time the listener have left TODO: is suppress necessary?
-        with suppress(ValueError):
-            await self._users.remove_listener(user)
+        # now we are supposed to break the connection on request
+        # self._connections.pop(user) left out INTENTIONALLY!
+        # await self._users.remove_listener(user) left out INTENTIONALLY!
+        # cleanup will be done by self._cleanup_task
 
         log.debug('Stream to {} terminated'.format(user))
         return response
@@ -233,45 +318,75 @@ class StreamServer:
         response = web.Response(text=body, headers=self._playlist_response_headers)
         return response
 
-    async def _sending_loop(self):
+    def _play_audio(self, data):
+        self._current_frame = data if len(self._current_frame) == self._frame_len else self._current_frame + data
+
+        with self._lock:
+            for user, connection in self._connections.items():
+                init = connection.first_send
+                # send data, if the connection is a new one whole frame (part) must be sent
+                if init:
+                    log.debug('Sending initial frame to {}'.format(user))
+                    connection.response.write(self._current_frame)
+                else:
+                    connection.response.write(data)
+
+                # now, if the frame is complete, append the metadata
+                if connection.meta and len(self._current_frame) == self._frame_len:
+                    if init or self._meta_changed:
+                        log.debug('Sending metadata to {}'.format(user))
+                        connection.response.write(self._current_meta)
+                    else:
+                        connection.response.write(b'\0')
+
+            if len(self._current_frame) == self._frame_len:
+                # metadata were sent
+                self._meta_changed = False
+
+    def _last_listener_cleanup(self):
+        log.debug('Last listener deinitialization')
+
+        # kill processing thread and stop the input
+        self._aac_thread.stop()
+        self._connected.clear()
+        # kill ffmpeg process
+        self._ffmpeg.kill()
+        self._ffmpeg.communicate()
+        # flush internal pipe
+        try:
+            os.read(self._internal_pipe, 1048576)
+        except OSError as e:
+            if e.errno != errno.EAGAIN:
+                raise
+        # reinitialize some internal variables
+        self._current_frame = b''
+        self._meta_changed = False
+        self._current_meta = b'\0'
+
+    async def _cleanup_loop(self):
         while True:
-            # wait for the next data batch
-            await self._data_event.wait()
+            # sleep for small amount of time
+            await asyncio.sleep(1)
+
             # keep the list of disconnected listeners
             disconnected = list()
-            # as this manipulates with buffers and connections, it is a critical section
+            # as this manipulates with connections, it is a critical section
+            log.debug('Trying to acquire lock in the cleanup loop')
             async with self._lock:
                 # iterate over all connections
                 for user, connection in self._connections.items():
                     try:
-                        init = connection.first_send
-                        # send data, if the connection is a new one whole frame (part) must be sent
-                        if init:
-                            log.debug('Sending initial frame to {}'.format(user))
-                            connection.response.write(self._current_frame)
-                        else:
-                            connection.response.write(self._current_data)
-
-                        # now, if the frame is complete, append the metadata
-                        if connection.meta and len(self._current_frame) == self._frame_len:
-                            if init or self._meta_changed:
-                                log.debug('Sending metadata to {}'.format(user))
-                                connection.response.write(self._current_meta)
-                            else:
-                                log.debug('Sending empty metadata to {}'.format(user))
-                                connection.response.write(b'\0')
-                        # call that actually rises any exceptions on a broken connection
-                        # TODO: get rid of this coroutine somehow?
                         await connection.response.drain()
                     except (errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
+                        log.debug('Connection broke with {}'.format(user))
                         disconnected.append(user)
-                        connection.terminate()
-                # clear meta flag
-                if len(self._current_frame) == self._frame_len:
-                    self._meta_changed = False
-                # remove all the disconnected clients
+
+                # now we can pop disconnected listeners and notify the UserManager
                 for user in disconnected:
                     self._connections.pop(user)
+                    await self._users.remove_listener(user)
 
-            # clear the flag for the next iteration
-            self._data_event.clear()
+                # cleanup must be done here because the original handler won't be resumed
+                if len(self._connections) == 0:
+                    self._last_listener_cleanup()
+                    return

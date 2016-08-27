@@ -18,84 +18,31 @@ import youtube_dl
 log = logging.getLogger('ddmbot.player')
 
 
-class StreamProcessor(threading.Thread):
-    def __init__(self, pipe_path, frame_len, frame_period, output_callback, **kwargs):
-        if not callable(output_callback):
-            raise TypeError('Output callback must be a callable object')
-
-        super().__init__(**kwargs)
-        self._pipe_fd = os.open(pipe_path, os.O_RDONLY | os.O_NONBLOCK)
-        self._frame_len = frame_len
-        self._frame_period = frame_period
-        self._play = output_callback
-
-        self._end = threading.Event()
-        self._volume = 1.0
-
-    def run(self):
-        raise NotImplementedError()
-
-    def stop(self):
-        self._end.set()
-        self.join()
-        self.flush()
-        os.close(self._pipe_fd)
-
-    def flush(self):
-        try:
-            os.read(self._pipe_fd, 1048576)
-        except OSError as e:
-            if e.errno != errno.EAGAIN:
-                raise
-
-
-class PcmProcessor(StreamProcessor):
-    def __init__(self, pipe_path, encoder, connected, output_callback, next_callback=None, **kwargs):
-        if next_callback is not None and not callable(next_callback):
+class PcmProcessor(threading.Thread):
+    def __init__(self, encoder, input_pipe, output_connected, output_pipe, client_connected, client_callback,
+                 next_callback):
+        if not callable(client_callback):
+            raise TypeError('Client callback must be a callable object')
+        if not callable(next_callback):
             raise TypeError('Next callback must be a callable object')
 
-        super().__init__(pipe_path, encoder.frame_size, encoder.frame_length / 1000.0, output_callback, **kwargs)
+        super().__init__()
+
+        self._frame_len = encoder.frame_size
+        self._frame_period = encoder.frame_length / 1000.0
+        self._volume = 1.0
+
+        self._in_pipe_fd = os.open(input_pipe, os.O_RDONLY | os.O_NONBLOCK)
+
+        self._output_connected = output_connected
+        self._out_pipe_fd = os.open(output_pipe, os.O_WRONLY | os.O_NONBLOCK)
+
+        self._client_connected = client_connected
+        self._play = client_callback
 
         self._next = next_callback
-        self._volume = 1.0
-        self._connected = connected
 
-    def run(self):
-        loops = 0
-        next_called = True
-        start_time = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
-        while not self._end.is_set():
-            loops += 1
-            try:
-                data = os.read(self._pipe_fd, self._frame_len)
-            except OSError as e:
-                if e.errno == errno.EAGAIN:
-                    log.warning('PcmProcessor: Buffer not ready')
-                    data = ''
-                else:
-                    raise
-
-            if self._volume != 1.0:
-                data = audioop.mul(data, 2, self._volume)
-
-            data_len = len(data)
-            if data_len == 0:
-                if not next_called and self._next is not None:
-                    next_called = True
-                    self._next()
-            else:
-                next_called = False
-                if self._connected.is_set():
-                    # we have at least some data, let's send them
-                    if len(data) != self._frame_len:
-                        log.debug('PcmProcessor: Buffer has been padded with zeroes')
-                        data.ljust(self._frame_len, b'\0')
-                    self._play(data)
-
-            # calculate next transmission time
-            next_time = start_time + self._frame_period * loops
-            sleep_time = max(0, self._frame_period + (next_time - time.clock_gettime(time.CLOCK_MONOTONIC_RAW)))
-            time.sleep(sleep_time)
+        self._end = threading.Event()
 
     @property
     def volume(self):
@@ -105,37 +52,82 @@ class PcmProcessor(StreamProcessor):
     def volume(self, value):
         self._volume = min(max(value, 0.0), 2.0)
 
+    def stop(self):
+        self._end.set()
+        self.join()
+        self.flush()
+        os.close(self._in_pipe_fd)
+        os.close(self._out_pipe_fd)
 
-class AacProcessor(StreamProcessor):
-    def __init__(self, pipe_path, frame_len, bitrate, output_callback, **kwargs):
-        super().__init__(pipe_path, frame_len, frame_len * 8 / bitrate, output_callback, **kwargs)
+    def flush(self):
+        try:
+            os.read(self._in_pipe_fd, 1048576)
+        except OSError as e:
+            if e.errno != errno.EAGAIN:
+                raise
 
     def run(self):
-        loops = 0
-        data_requested = self._frame_len
+        loops = 0  # loop counter
+        next_called = True  # variable to prevent constant calling of self._next()
+        buffering_cycles = 0
+        cycles_in_second = 1 // self._frame_period
+        zero_data = b'\0' * self._frame_len
+
+        # capture the starting time
         start_time = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
         while not self._end.is_set():
+            # increment loop counter
             loops += 1
-            try:
-                data = os.read(self._pipe_fd, data_requested)
-            except OSError as e:
-                if e.errno == errno.EAGAIN:
-                    log.warning('AacProcessor: Buffer not ready')
-                    data = ''
-                else:
-                    raise
 
-            data_len = len(data)
-            if data_len != 0:
-                if data_len != self._frame_len:
-                    log.debug('AacProcessor: Sending partial buffer of size {}'.format(data_len))
-                # we cannot align the data with zeroes, so send what we've got
+            # if it's not a buffering cycle read more data
+            if buffering_cycles:
+                buffering_cycles -= 1
+                data = zero_data
+            else:
+                try:
+                    data = os.read(self._in_pipe_fd, self._frame_len)
+                    data_len = len(data)
+
+                    if data_len:
+                        next_called = False
+
+                    if data_len != self._frame_len:
+                        if data_len == 0:
+                            # if we read nothing, that means the input to the pipe is not connected anymore
+                            if not next_called:
+                                next_called = True
+                                self._next()
+                            data = zero_data
+                        else:
+                            # if we read something, we are likely at the end of the input, pad with zeroes and log
+                            # TODO: is there a way to distinguish buffering issues and end of the input issues?
+                            log.info('PcmProcessor: Data were padded with zeroes')
+                            data.ljust(self._frame_len, b'\0')
+
+                except OSError as e:
+                    if e.errno == errno.EAGAIN:
+                        data = zero_data
+                        log.warning('PcmProcessor: Buffer not ready, waiting one second')
+                        buffering_cycles = cycles_in_second
+                    else:
+                        raise
+
+            # now we try to pass data to the output, if connected
+            if self._output_connected.is_set():
+                try:
+                    os.write(self._out_pipe_fd, data)
+                except OSError as e:
+                    if e.errno == errno.EAGAIN:
+                        log.warning('PcmProcessor: Output pipe not ready, dropping frame')
+                    else:
+                        raise
+
+            # and last but not least, discord output
+            if self._client_connected.is_set() and not buffering_cycles:
+                # adjust the volume
+                data = audioop.mul(data, 2, self._volume)
+                # call the callback
                 self._play(data)
-
-            # next time we will try to send the rest of the frame
-            data_requested -= data_len
-            if data_requested == 0:
-                data_requested = self._frame_len
 
             # calculate next transmission time
             next_time = start_time + self._frame_period * loops
@@ -177,7 +169,6 @@ class Player:
 
         self._player_task = None
         self._pcm_thread = None
-        self._aac_thread = None
         self._ffmpeg_command = None
         self._ffmpeg = None
 
@@ -193,31 +184,28 @@ class Player:
         self._meta_callback = aac_server.set_meta
 
         # TODO: replace protected member access with a method VoiceClient.is_connected()
-        self._pcm_thread = PcmProcessor(self._config['pcm_pipe'], bot_voice.encoder, bot_voice._connected,
-                                        bot_voice.play_audio, self._playback_ended_callback)
-        self._aac_thread = AacProcessor(self._config['aac_pipe'], aac_server.frame_len, aac_server.bitrate,
-                                        aac_server.play_audio)
-
+        self._pcm_thread = PcmProcessor(bot_voice.encoder, self._config['pcm_pipe'], aac_server.connected,
+                                        aac_server.internal_pipe_path, bot_voice._connected, bot_voice.play_audio,
+                                        self._playback_ended_callback)
         self._pcm_thread.start()
-        self._aac_thread.start()
 
         self._ffmpeg_command = 'ffmpeg -loglevel error -i {{}} -y -vn' \
                                ' -f s16le -ar {} -ac {} {}' \
-                               ' -f adts -ar 48000 -ac 2 -c:a libfdk_aac -b:a {}k {}' \
-            .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['pcm_pipe']),
-                    aac_server.bitrate // 1000, shlex.quote(self._config['aac_pipe']))
+            .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['pcm_pipe']))
         self._player_task = self._bot.loop.create_task(self._player_fsm())
 
     async def cleanup(self):
-        if self._pcm_thread is not None:
-            self._pcm_thread.stop()
-        if self._aac_thread is not None:
-            self._aac_thread.stop()
-
         if self._player_task is not None:
             self._player_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._player_task
+
+        if self._ffmpeg is not None and self._ffmpeg.poll() is None:
+            self._ffmpeg.kill()
+            self._ffmpeg.communicate()
+
+        if self._pcm_thread is not None:
+            self._pcm_thread.stop()
 
     #
     # Properties reflecting the player's state
@@ -561,7 +549,6 @@ class Player:
 
             # clean the IPC pipes used
             self._pcm_thread.flush()
-            self._aac_thread.flush()
 
     #
     # Other helper methods
