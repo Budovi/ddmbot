@@ -152,19 +152,19 @@ class CommandHandler:
     @dec.command(ignore_extra=False)
     async def ignore(self, member: discord.Member):
         if self._operator_role in member.roles:
-            raise dec.UserInputError('User {} is an operator and cannot be ignored'.format(member.display_name))
+            raise dec.UserInputError('User {} is an operator and cannot be ignored'.format(member))
 
         self._ignorelist.add(member.id)
-        await self._message('User {} has been added to the ignore list'.format(member.display_name))
+        await self._message('User {} has been added to the ignore list'.format(member))
 
     @privileged(True)
     @dec.command(ignore_extra=False)
     async def unignore(self, member: discord.Member):
         if member.id not in self._ignorelist:
-            raise dec.UserInputError('User {} is not on the ignore list'.format(member.display_name))
+            raise dec.UserInputError('User {} is not on the ignore list'.format(member))
 
         self._ignorelist.remove(member.id)
-        await self._message('User {} successfully removed from the ignore list'.format(member.display_name))
+        await self._message('User {} successfully removed from the ignore list'.format(member))
 
     #
     # Player controls
@@ -212,9 +212,9 @@ class CommandHandler:
     async def kick(self, member: discord.Member):
         try:
             await self._users.leave_queue(int(member.id))
-            await self._message('User {} was removed from the DJ queue'.format(member.display_name))
+            await self._message('User {} was removed from the DJ queue'.format(member))
         except ValueError:
-            raise dec.UserInputError('User {} is not in the DJ queue'.format(member.display_name))
+            raise dec.UserInputError('User {} is not in the DJ queue'.format(member))
 
     #
     # Song controls
@@ -338,7 +338,7 @@ class CommandHandler:
                 if member is None:
                     file.write('{} <unknown username>\n'.format(user_id))
                 else:
-                    file.write('{} {}\n'.format(user_id, member.display_name))
+                    file.write('{} {}\n'.format(user_id, member))
 
     #
     # Helper methods
