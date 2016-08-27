@@ -306,32 +306,79 @@ class CommandHandler:
     # Song management
     #
     @privileged(True)
-    @dec.command(pass_context=True, ignore_extra=False)
-    async def blacklist(self, ctx, song_id: int):
+    @dec.command(ignore_extra=False)
+    async def blacklist(self, which: int):
         try:
-            await self._songs.blacklist_song(song_id)
+            await self._songs.add_to_blacklist(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
+        await self._message('Song [{}] has been blacklisted'.format(which))
+
+    @dec.command(ignore_extra=False)
+    async def unblacklist(self, which: int):
+        try:
+            await self._songs.remove_from_blacklist(which)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        await self._message('Song [{}] has been removed from blacklist'.format(which))
 
     @privileged(True)
-    @dec.command(pass_context=True, ignore_extra=False)
-    async def deduplicate(self, ctx):
-        pass
+    @dec.command(ignore_extra=False)
+    async def deduplicate(self, which: int, target: int):
+        try:
+            await self._songs.merge_songs(which, target)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        await self._message('Song [{}] has been marked as a duplicate of the song [{}]'.format(which, target))
 
     @privileged(True)
-    @dec.command(pass_context=True, ignore_extra=False)
-    async def split(self, ctx):
-        pass
+    @dec.command(ignore_extra=False)
+    async def split(self, which: int):
+        try:
+            await self._songs.split_song(which)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        await self._message('Song [{}] has been marked as unique'.format(which))
 
     @privileged(True)
-    @dec.command(pass_context=True, ignore_extra=False)
-    async def rename(self, ctx):
-        pass
+    @dec.command(ignore_extra=False)
+    async def rename(self, which: int, new_title: str):
+        try:
+            await self._songs.rename_song(which, new_title)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        await self._message('Song [{}] has been renamed to "{}"'.format(which, new_title))
 
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
-    async def dbsearch(self, ctx):
-        pass
+    @dec.command(ignore_extra=False)
+    async def search(self, *keywords: str):
+        items = await self._songs.search_songs(keywords)
+        if len(items) == 0:
+            await self._bot.whisper('Search for songs with keywords {} has not returned any result'.format(keywords))
+            return
+        reply = '**First 20 songs matching the keywords {}:**\n **>** '.format(keywords) + \
+                '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
+        await self._bot.whisper(reply)
+
+    @privileged(False)
+    @dec.command(ignore_extra=False)
+    async def info(self, which: int):
+        try:
+            info = await self._songs.get_song_info(which)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        reply = '**Song [{id}] information:**\n' \
+                '    **Unique URI:** {uuri}\n' \
+                '    **Title:** {title}\n' \
+                '    **Last played:** {last_played!s}\n' \
+                '    **Hype count:** {total_hype_count} ({hype_count})\n' \
+                '    **Skip votes:** {total_skip_votes} ({skip_votes})\n' \
+                '    **Duration:** {duration}s\n' \
+                '    **Credits remaining:** {credits_remaining}\n\n' \
+                '    **Blacklisted:** {blacklisted}\n\n' \
+                '    **Marked as a duplicate of:** {duplicates}\n' \
+                '    **Is duplicated by:** {duplicated_by}'.format_map(info)
+        await self._bot.whisper(reply)
 
     #
     # Ignore list load and save

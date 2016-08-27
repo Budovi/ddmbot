@@ -194,8 +194,12 @@ class SongManager:
     #
     # Song management
     #
-    async def blacklist_song(self, song_id):
-        func = functools.partial(self._blacklist_song, song_id)
+    async def add_to_blacklist(self, song_id):
+        func = functools.partial(self._add_to_blacklist, song_id)
+        return await self._loop.run_in_executor(None, func)
+
+    async def remove_from_blacklist(self, song_id):
+        func = functools.partial(self._remove_from_blacklist, song_id)
         return await self._loop.run_in_executor(None, func)
 
     async def search_songs(self, keywords):
@@ -210,8 +214,12 @@ class SongManager:
         func = functools.partial(self._merge_songs, source_id, target_id)
         return await self._loop.run_in_executor(None, func)
 
-    async def split_songs(self, target_id):
-        func = functools.partial(self._merge_songs, target_id, target_id)
+    async def split_song(self, song_id):
+        func = functools.partial(self._merge_songs, song_id, song_id)
+        return await self._loop.run_in_executor(None, func)
+
+    async def rename_song(self, song_id, new_title):
+        func = functools.partial(self._rename_song, song_id, new_title)
         return await self._loop.run_in_executor(None, func)
 
     #
@@ -469,15 +477,19 @@ class SongManager:
             update_query.execute()
             delete_query.execute()
 
-    def _blacklist_song(self, song_id):
+    def _add_to_blacklist(self, song_id):
         if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id).execute() != 1:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+
+    def _remove_from_blacklist(self, song_id):
+        if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
     def _search_songs(self, keywords):  # intentionally kept as an instance method
         query = DBSong.select(DBSong.id, DBSong.title)
         for keyword in keywords:
             keyword = '%{}%'.format(keyword)
-            query = query.where((DBSong.title % keyword) | (DBSong.uuri % keyword))
+            query = query.where((DBSong.title ** keyword) | (DBSong.uuri ** keyword))
         query = query.limit(20)
 
         result = list()
@@ -488,13 +500,12 @@ class SongManager:
     def _get_song_info(self, song_id):  # intentionally kept as an instance method
         try:
             song = DBSong.get(id=song_id)
-            result = {'id': song.id, 'title': song.title, 'last_played': song.last_played,
-                      'hype_count': song.hype_count,
-                      'total_hype_count': song.hype_count, 'skip_votes': song.skip_votes,
-                      'total_skip_votes': song.skip_votes, 'play_count': song.play_count,
-                      'total_play_count': song.play_count, 'duration': song.duration,
-                      'credits_remaining': song.credit_count, 'blacklisted': song.is_blacklisted,
-                      'duplicates': None, 'duplicated_by': list()}
+            result = {'id': song.id, 'title': song.title, 'last_played': song.last_played, 'uuri': song.uuri,
+                      'hype_count': song.hype_count, 'total_hype_count': song.hype_count,
+                      'skip_votes': song.skip_votes, 'total_skip_votes': song.skip_votes,
+                      'play_count': song.play_count, 'total_play_count': song.play_count,
+                      'duration': song.duration, 'credits_remaining': song.credit_count,
+                      'blacklisted': song.is_blacklisted, 'duplicates': None, 'duplicated_by': list()}
             if song.duplicate_id is not None:
                 song2 = song.duplicate
                 result['duplicates'] = (song2.id, song2.title)
@@ -534,6 +545,10 @@ class SongManager:
                 if DBSong.update(duplicate=target_id).where(
                                 (DBSong.id == source_id) | (DBSong.duplicate == source_id)).execute() == 0:
                     raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
+
+    def _rename_song(self, song_id, new_title):
+        if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
     async def _credit_renew(self):
         # check if the last timestamp is present in the database
