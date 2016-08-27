@@ -101,7 +101,7 @@ class UserManager:
                 # someone using a direct stream switches over to the discord voice
                 self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
 
-            self._listeners[discord_id] = {'active': current_time, 'direct': token is None, 'notified_ds': False,
+            self._listeners[discord_id] = {'active': current_time, 'direct': token is not None, 'notified_ds': False,
                                            'notified_dj': False}
             # invalidate the token
             if token is not None:

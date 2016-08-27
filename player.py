@@ -2,8 +2,8 @@ import audioop
 import asyncio
 import enum
 import errno
-import logging
 import functools
+import logging
 import os
 import shlex
 import subprocess

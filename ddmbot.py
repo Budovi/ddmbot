@@ -77,6 +77,8 @@ async def on_ready():
             users.init(player)
             # populate user manager with existing listeners
             for member in ddmbot.voice_channel.voice_members:
+                if member == ddmbot.user:
+                    continue
                 if not member.voice.self_deaf:
                     await users.add_listener(int(member.id))
 
