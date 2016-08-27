@@ -175,8 +175,8 @@ class SongManager:
     #
     # Playlist operations
     #
-    async def list_playlist(self, user_id):
-        func = functools.partial(self._list_playlist, user_id)
+    async def list_playlist(self, user_id, offset, limit):
+        func = functools.partial(self._list_playlist, user_id, offset, limit)
         return await self._loop.run_in_executor(None, func)
 
     async def append_to_playlist(self, user_id, uris):
@@ -355,14 +355,17 @@ class SongManager:
         result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
         return SongContext(None, song.id, song.title, result['url'])
 
-    def _list_playlist(self, user_id):
+    def _list_playlist(self, user_id, offset, limit):
         result = list()
         with self._database.atomic():
             user = self._get_user(user_id)
             current_link_id = user.playlist_head_id
-            while current_link_id is not None:
+            for index in range(limit + offset):
+                if current_link_id is None:
+                    break
                 link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == current_link_id).get()
-                result.append((link.song.id, link.song.title))
+                if index >= offset:
+                    result.append((link.song.id, link.song.title))
                 current_link_id = link.next_id
         return result
 

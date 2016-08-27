@@ -15,6 +15,7 @@ def privileged(priv):
     def append_attr_priv(command):
         command.privileged = priv
         return command
+
     return append_attr_priv
 
 
@@ -275,12 +276,19 @@ class CommandHandler:
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
-    async def list(self, ctx):
-        items = await self._songs.list_playlist(int(ctx.message.author.id))
+    async def list(self, ctx, start: int = 1):
+        ordinal = lambda n: "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
+
+        items = await self._songs.list_playlist(int(ctx.message.author.id), start - 1, 20)
         if len(items) == 0:
-            await self._bot.whisper('Your playlist is empty')
+            if start == 1:
+                await self._bot.whisper('Your playlist is empty')
+            else:
+                await self._bot.whisper('You don\'t have any songs in your playlist starting from {}'
+                                        .format(ordinal(start)))
             return
-        reply = 'First 20 songs from your playlist:\n > ' + '\n > '.join(['[{}] {}'.format(*item) for item in items])
+        reply = '20 songs from your playlist, starting from {}:\n > '.format(ordinal(start)) + \
+                '\n > '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
     #
