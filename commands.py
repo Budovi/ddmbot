@@ -251,7 +251,7 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False)
     async def forceskip(self, ctx):
         if await self._player.force_skip():
-            await self._bot.say('Skip forced by {}'.format(ctx.message.author.mention))
+            await self._message('Skip forced by {}'.format(ctx.message.author.mention))
 
     #
     # Playlist management
@@ -266,9 +266,9 @@ class CommandHandler:
                                 'likely or fail.')
         # now do the operation
         inserted, truncated, error_list = await self._songs.append_to_playlist(int(ctx.message.author.id), uris)
-        reply = '{} song(s) appended\n{} insertions failed'.format(inserted, len(error_list))
+        reply = '**{} song(s) appended**\n**{} insertions failed**'.format(inserted, len(error_list))
         if truncated:
-            reply += '\nPart of the input was omitted due to playlist length restrictions.'
+            reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
         if len(error_list) > 0:
             reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
@@ -298,8 +298,8 @@ class CommandHandler:
                 await self._bot.whisper('You don\'t have any songs in your playlist starting from {}'
                                         .format(ordinal(start)))
             return
-        reply = '20 songs from your playlist, starting from {}:\n > '.format(ordinal(start)) + \
-                '\n > '.join(['[{}] {}'.format(*item) for item in items])
+        reply = '**20 songs from your playlist, starting from {}:**\n **>** '.format(ordinal(start)) + \
+                '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
     #

@@ -360,11 +360,11 @@ class Player:
                 queued_by = 'auto-playlist' if self._song_context.user_id is None else \
                     '<@{}>'.format(self._song_context.user_id)
 
-                message = 'Playing: [{0.song_id}] {0.title}, queued by {1}\n' \
-                          'Hypes: {0.hype_count} ({2})\n' \
-                          'Skip votes: {0.skip_votes}\n' \
-                          'Listeners: {3}\n' \
-                          'Queue: {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
+                message = '**Playing:** [{0.song_id}] {0.title}, **queued by** {1}\n' \
+                          '**Hypes:** {0.hype_count} ({2})\n' \
+                          '**Skip votes:** {0.skip_votes}\n' \
+                          '**Listeners:** {3}\n' \
+                          '**Queue:** {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
 
                 queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
                 stream_title = '{} queued by {}'.format(self._song_context.title, queued_by)
@@ -376,8 +376,8 @@ class Player:
                     self._switch_state.set()
 
             elif self.streaming:
-                message = 'Playing stream: {}\n' \
-                          'Listeners: {}'.format(self._stream_name, listeners_str)
+                message = '**Playing stream:** {}\n' \
+                          '**Listeners:** {}'.format(self._stream_name, listeners_str)
                 stream_title = self._stream_name
 
             if message:
