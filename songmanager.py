@@ -369,10 +369,12 @@ class SongManager:
                 current_link_id = link.next_id
         return result
 
-    def _process_uris(self, uris):
+    def _process_uris(self, uris, limit):
         song_list = list()
         error_list = list()
         for uri in uris:
+            if len(song_list) >= limit:
+                return song_list, error_list, True
             if uri.isdigit():  # test if it's a plain integer -- we will assume it's an unique URI
                 try:
                     song_list.append(DBSong.get(id=int(uri)))
@@ -386,6 +388,8 @@ class SongManager:
                         continue
 
                     for entry in result['entries']:
+                        if len(song_list) >= limit:
+                            return song_list, error_list, True
                         try:  # youtube_dl or regex matching can fail
                             if entry['ie_key'] == 'Youtube':
                                 # for some reason youtube URLs are not URLs but video IDs
@@ -405,14 +409,14 @@ class SongManager:
                 except youtube_dl.utils.DownloadError as e:
                     error_list.append('{}, while processing {}'.format(str(e), uri))
 
-        return song_list, error_list
+        return song_list, error_list, False
 
     def _append_to_playlist(self, user_id, uris):
         count = DBSongLink.select().where(DBSongLink.user == user_id).count()
         if count >= self._config_max_songs:
             raise RuntimeError('User\'s playlist is full')
         # assembly the list of songs for insertion
-        song_list, error_list = self._process_uris(uris)
+        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
         # now create the links in the database
         with self._database.atomic():
             user = self._get_user(user_id)
@@ -437,10 +441,10 @@ class SongManager:
                 user.playlist_head_id = previous_link
                 user.save()
 
+        truncated |= len(song_list) > to_insert
         inserted = min(len(song_list), to_insert)
-        over = len(song_list) - inserted
 
-        return inserted, over, error_list
+        return inserted, truncated, error_list
 
     def _shuffle_playlist(self, user_id):
         query = DBSongLink.select().where(DBSongLink.user == user_id)

@@ -255,11 +255,18 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
     async def append(self, ctx, *uris: str):
-        inserted, over, error_list = await self._songs.append_to_playlist(int(ctx.message.author.id), uris)
-        reply = '{} song(s) appended\n{} song(s) over limit\n{} insertions failed'\
-            .format(inserted, over, len(error_list))
+        # print the disclaimer
+        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
+                                'result. You can run other commands, but avoid manipulating your playlist. Trying to '
+                                'modify your playlist multiple times at once may yield unexpected results and is more '
+                                'likely or fail.')
+        # now do the operation
+        inserted, truncated, error_list = await self._songs.append_to_playlist(int(ctx.message.author.id), uris)
+        reply = '{} song(s) appended\n{} insertions failed'.format(inserted, len(error_list))
+        if truncated:
+            reply += '\nPart of the input was omitted due to playlist length restrictions.'
         if len(error_list) > 0:
-            reply = reply + '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
+            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
 
     @privileged(False)
