@@ -16,7 +16,7 @@ Please note this project is in early stages and not everything works properly an
 DdmBot has the following dependencies:
 
 * **GNU/Linux OS**, used distribution is up to you, but code is not portable and Windows is not supported
-* **python 3.5** or newer
+* **python 3.5.1** or newer
 * [**discord.py**](https://github.com/Rapptz/discord.py), python Discord API
 * **aiohttp** (version used by *discord.py* will be just fine so you won't need to install this separately)
 * **ffmpeg** *with libfdk_aac support* (you need to either compile it yourself ([homepage](https://ffmpeg.org/)) or try to find it in your distribution's repositories)
