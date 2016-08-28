@@ -212,10 +212,9 @@ class UserManager:
                     time_diff = current_time - attributes['active']
                     if time_diff > self._config_ds_remove_time:
                         self._whisper(listener, 'You have been disconnected from the stream due to inactivity')
-                        remove_djs.add(listener)
                         remove_listeners.add(listener)
                     elif time_diff > self._config_ds_notify_time and not attributes['notified_ds']:
-                        log.info(listener, 'Listener {} notified for being inactive'.format(listener))
+                        log.info('Listener {} notified for being inactive'.format(listener))
                         self._whisper(listener, 'You\'re about to be disconnected from the stream due to inactivity.\n'
                                                 'Please reply to this message to prevent that.')
                         attributes['notified_ds'] = True
@@ -230,4 +229,13 @@ class UserManager:
                 for listener in remove_listeners:
                     log.info('Listener {} has timed out'.format(listener))
                     self._bot.loop.create_task(self._aac_server.disconnect(listener))
+                    with suppress(ValueError):
+                        self._queue.remove(listener)
                     self._listeners.pop(listener)
+
+            # now update the player
+            if len(remove_djs):
+                if len(self._queue) == 0:
+                    self._player.cooldown_reset()
+            if len(remove_listeners) or len(remove_djs):
+                self._player.users_changed()
