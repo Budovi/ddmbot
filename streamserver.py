@@ -346,12 +346,13 @@ class StreamServer:
     def _last_listener_cleanup(self):
         log.debug('Last listener deinitialization')
 
-        # kill processing thread and stop the input
-        self._aac_thread.stop()
+        # stop the input
         self._connected.clear()
         # kill ffmpeg process
         self._ffmpeg.kill()
         self._ffmpeg.communicate()
+        # kill processing thread
+        self._aac_thread.stop()
         # flush internal pipe
         try:
             os.read(self._internal_pipe, 1048576)
@@ -360,8 +361,6 @@ class StreamServer:
                 raise
         # reinitialize some internal variables
         self._current_frame = b''
-        self._meta_changed = False
-        self._current_meta = b'\0'
 
     async def _cleanup_loop(self):
         while True:
