@@ -368,6 +368,10 @@ class Player:
                           '**Listeners:** {}'.format(self._stream_name, listeners_str)
                 stream_title = self._stream_name
 
+            elif self.stopped:
+                message = '**Player is stopped**'
+                stream_title = 'Awkward silence'
+
             if message:
                 if self._status_message:
                     self._status_message = await self._bot.edit_message(self._status_message, message)
@@ -446,6 +450,7 @@ class Player:
                 # clear the queue and dj_cooldown to behave as intended next time
                 await self._users.clear_queue()
                 self._dj_cooldown.clear()
+                self._bot.loop.create_task(self._update_status())
             #
             # STREAM_MODE
             #
@@ -539,8 +544,6 @@ class Player:
                 # we need to actually wait for this to ensure proper functionality of overplaying protection
                 await self._songs.update_stats(self._song_context)
                 self._song_context = None
-            elif self.streaming:
-                await self._message('Stream has been interrupted')
 
             # kill ffmpeg if still running
             if self._ffmpeg is not None and self._ffmpeg.poll() is None:
