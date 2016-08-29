@@ -58,8 +58,10 @@ class DBSongLink(DBSchema):
 class DBUser(DBSchema):
     discord_id = peewee.BigIntegerField(primary_key=True)
 
-    hype_count = peewee.IntegerField(default=0)
-    skip_votes = peewee.IntegerField(default=0)
+    hype_count_got = peewee.IntegerField(default=0)
+    hype_count_given = peewee.IntegerField(default=0)
+    skip_votes_got = peewee.IntegerField(default=0)
+    skip_votes_given = peewee.IntegerField(default=0)
     play_count = peewee.IntegerField(default=0)
 
     playlist_head = peewee.ForeignKeyField(DBSongLink, null=True, default=None)
@@ -332,14 +334,27 @@ class SongManager:
                                    play_count=DBSong.play_count + 1,
                                    last_played=current_time, credit_count=DBSong.credit_count - 1) \
             .where(DBSong.id == song_ctx.song_id)
-        # update a user in the database -- hype, skip count
-        user_query = DBUser.update(hype_count=DBUser.hype_count + song_ctx.hype_count,
-                                   skip_votes=DBUser.skip_votes + song_ctx.skip_votes,
+        # update a user in the database -- hype, skip count song received
+        user_query = DBUser.update(hype_count_got=DBUser.hype_count_got + song_ctx.hype_count,
+                                   skip_votes_got=DBUser.skip_votes_got + song_ctx.skip_votes,
                                    play_count=DBUser.play_count + 1) \
             .where(DBUser.discord_id == song_ctx.user_id)
+
+        # prepare all the other users which may not exist in the database
+        user_dict_list = [{'discord_id': user_id} for user_id in (song_ctx.get_hype_set() | song_ctx.get_skip_set())]
+        if len(user_dict_list):
+            DBUser.insert_many(user_dict_list).on_conflict('ignore').execute()
+        # now do the votes query which will update _given stats
+        hypes_query = DBUser.update(hype_count_given=DBUser.hype_count_given + 1)\
+            .where(DBUser.discord_id << song_ctx.get_hype_set())
+        skips_query = DBUser.update(skip_votes_given=DBUser.skip_votes_given + 1)\
+            .where(DBUser.discord_id << song_ctx.get_skip_set())
+
         with self._database.atomic():
             song_query.execute()
             user_query.execute()
+            hypes_query.execute()
+            skips_query.execute()
 
     def _get_autoplaylist_song(self):
         reference_time = datetime.datetime.now() - \
@@ -350,8 +365,8 @@ class SongManager:
             DBSong.skip_votes * self._config_ap_ratio <= DBSong.hype_count,  # hype to skip ratio
             DBSong.duration <= self._config_max_duration,  # song duration
             DBSong.credit_count > 0,  # overplay protection
-            DBSong.is_blacklisted == False,  # cannot be blacklisted
-            DBSong.duplicate == None  # not fair + outdated information
+            ~DBSong.is_blacklisted,  # cannot be blacklisted
+            DBSong.duplicate >> None  # not fair + outdated information
         ).order_by(peewee.fn.Random())
 
         try:
@@ -436,7 +451,7 @@ class SongManager:
 
             connection_point = None
             if user.playlist_head_id is not None:
-                connection_point = DBSongLink.get(DBSongLink.user == user_id, DBSongLink.next == None)
+                connection_point = DBSongLink.get(DBSongLink.user == user_id, DBSongLink.next >> None)
 
             previous_link = None
             for song in song_list[to_insert - 1::-1]:
