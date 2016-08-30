@@ -1,9 +1,9 @@
 import asyncio
-import datetime
 import functools
 import random
 import re
 from contextlib import suppress
+from datetime import datetime, timedelta
 
 import peewee
 import youtube_dl
@@ -132,7 +132,7 @@ class SongManager:
         self._config_max_songs = int(config['chain_limit'])
         self._config_op_interval = int(config['op_interval'])
         self._config_op_credit_cap = int(config['op_credit_cap'])
-        self._config_op_credit_renew = datetime.timedelta(hours=int(config['op_credit_renew']))
+        self._config_op_credit_renew = timedelta(hours=int(config['op_credit_renew']))
         self._loop = loop
 
         self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
@@ -281,10 +281,16 @@ class SongManager:
         except DBSong.DoesNotExist:
             # we need to create a new record, youtube_dl is necessary to obtain a title and a song length
             result = self._ytdl.extract_info(self._make_url(song_uuri), download=False, process=False)
-            song, created = DBSong.create_or_get(uuri=song_uuri, title=result['title'],
-                                                 last_played=datetime.datetime.utcfromtimestamp(0),
-                                                 duration=int(result['duration']),
-                                                 credit_count=self._config_op_credit_cap)
+            try:
+                title = result['title']
+            except KeyError:
+                raise RuntimeError('Failed to extract song title')
+            try:
+                duration = int(result['duration'])
+            except (KeyError, ValueError):
+                raise RuntimeError('Failed to extract song duration')
+            song, created = DBSong.create_or_get(uuri=song_uuri, title=title, last_played=datetime.utcfromtimestamp(0),
+                                                 duration=duration, credit_count=self._config_op_credit_cap)
         return song
 
     def _get_next_song(self, user_id):
@@ -312,7 +318,7 @@ class SongManager:
         if song.is_blacklisted:
             raise ValueError('Song [{}] is blacklisted'.format(song.id))
         # -- last played
-        time_diff = datetime.datetime.now() - song.last_played
+        time_diff = datetime.now() - song.last_played
         if time_diff.total_seconds() < self._config_op_interval:
             raise ValueError('Song [{}] has been played recently'.format(song.id))
         # -- credits remaining
@@ -327,7 +333,7 @@ class SongManager:
         return SongContext(user_id, song.id, song.title, result['url'])
 
     def _update_stats(self, song_ctx: SongContext):
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
         # update a song in the database -- hype, skip count, credit count, last played
         song_query = DBSong.update(hype_count=DBSong.hype_count + song_ctx.hype_count,
                                    skip_votes=DBSong.skip_votes + song_ctx.skip_votes,
@@ -357,8 +363,8 @@ class SongManager:
             skips_query.execute()
 
     def _get_autoplaylist_song(self):
-        reference_time = datetime.datetime.now() - \
-                         datetime.timedelta(seconds=self._config_op_interval)
+        reference_time = datetime.now() - \
+                         timedelta(seconds=self._config_op_interval)
         query = DBSong.select(DBSong).where(
             DBSong.last_played < reference_time,  # overplay protection interval
             DBSong.hype_count >= self._config_ap_threshold,  # hype threshold
@@ -492,11 +498,11 @@ class SongManager:
             update_query.execute()
             delete_query.execute()
 
-    def _add_to_blacklist(self, song_id):
+    def _add_to_blacklist(self, song_id):  # intentionally kept as an instance method
         if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
-    def _remove_from_blacklist(self, song_id):
+    def _remove_from_blacklist(self, song_id):  # intentionally kept as an instance method
         if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
@@ -561,18 +567,18 @@ class SongManager:
                                 (DBSong.id == source_id) | (DBSong.duplicate == source_id)).execute() == 0:
                     raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
 
-    def _rename_song(self, song_id, new_title):
+    def _rename_song(self, song_id, new_title):  # intentionally kept as an instance method
         if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
     async def _credit_renew(self):
         # check if the last timestamp is present in the database
         if DBCreditTimestamp.select().count() == 0:
-            DBCreditTimestamp.create(last=datetime.datetime.now())
+            DBCreditTimestamp.create(last=datetime.now())
 
         # now the endless task loop
         while True:
-            current_time = datetime.datetime.now()
+            current_time = datetime.now()
             last_time = DBCreditTimestamp.get().last
             credits_to_add = (current_time - last_time) // self._config_op_credit_renew
             if credits_to_add > 0:
