@@ -275,6 +275,43 @@ class CommandHandler:
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False)
+    async def prepend(self, ctx, *uris: str):
+        # print the disclaimer
+        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
+                                'result. You can run other commands, but avoid manipulating your playlist. Trying to '
+                                'modify your playlist multiple times at once may yield unexpected results and is more '
+                                'likely to fail.')
+        # now do the operation
+        inserted, truncated, error_list = await self._songs.prepend_to_playlist(int(ctx.message.author.id), uris)
+        reply = '**{} song(s) prepended**\n**{} insertions failed**'.format(inserted, len(error_list))
+        if truncated:
+            reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
+        if len(error_list) > 0:
+            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
+        await self._bot.whisper(reply)
+
+    @privileged(False)
+    @dec.command(pass_context=True, ignore_extra=False)
+    async def pop(self, ctx, count: int=1):
+        real_count = await self._songs.pop_from_playlist(int(ctx.message.author.id), count)
+
+        reply = '**{} song(s) removed from your playlist**'.format(real_count)
+        if real_count < count:
+            reply += '\n{} song(s) could not be removed because your playlist is empty.'.format(count - real_count)
+        await self._bot.whisper(reply)
+
+    @privileged(False)
+    @dec.command(pass_context=True, ignore_extra=False)
+    async def push(self, ctx, *keywords: str):
+        if not len(keywords):
+            raise dec.UserInputError('You must specify at least one keyword to search')
+
+        song_id, song_title = await self._songs.push_to_playlist(int(ctx.message.author.id), keywords)
+        await self._bot.whisper('**Song** [{}] {} **was added to your playlist. If this is not correct, you can remove'
+                                ' it by using the *pop* command.**'.format(song_id, song_title))
+
+    @privileged(False)
+    @dec.command(pass_context=True, ignore_extra=False)
     async def clear(self, ctx):
         await self._songs.clear_playlist(int(ctx.message.author.id))
         await self._bot.whisper('Your playlist was cleared')

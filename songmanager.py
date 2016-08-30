@@ -185,6 +185,18 @@ class SongManager:
         func = functools.partial(self._append_to_playlist, user_id, uris)
         return await self._loop.run_in_executor(None, func)
 
+    async def prepend_to_playlist(self, user_id, uris):
+        func = functools.partial(self._prepend_to_playlist, user_id, uris)
+        return await self._loop.run_in_executor(None, func)
+
+    async def pop_from_playlist(self, user_id, count):
+        func = functools.partial(self._pop_from_playlist, user_id, count)
+        return await self._loop.run_in_executor(None, func)
+
+    async def push_to_playlist(self, user_id, keywords):
+        func = functools.partial(self._push_to_playlist, user_id, keywords)
+        return await self._loop.run_in_executor(None, func)
+
     async def shuffle_playlist(self, user_id):
         func = functools.partial(self._shuffle_playlist, user_id)
         return await self._loop.run_in_executor(None, func)
@@ -474,6 +486,81 @@ class SongManager:
         inserted = min(len(song_list), to_insert)
 
         return inserted, truncated, error_list
+
+    def _prepend_to_playlist(self, user_id, uris):
+        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
+        if count >= self._config_max_songs:
+            raise RuntimeError('Your playlist is full')
+        # assembly the list of songs for insertion
+        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
+        # now create the links in the database
+        with self._database.atomic():
+            user = self._get_user(user_id)
+
+            # atomically re-check the condition
+            to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
+            if to_insert <= 0:
+                raise RuntimeError('Your playlist is full')
+
+            previous_link = user.playlist_head_id
+            for song in song_list[to_insert - 1::-1]:
+                previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
+            # connect the chain created
+            user.playlist_head_id = previous_link
+            user.save()
+
+        truncated |= len(song_list) > to_insert
+        inserted = min(len(song_list), to_insert)
+
+        return inserted, truncated, error_list
+
+    def _pop_from_playlist(self, user_id, count):
+        if count <= 0:
+            return 0
+
+        with self._database.atomic():
+            user = self._get_user(user_id)
+
+            deleted = 0
+            current_link = user.playlist_head
+            while deleted < count and current_link is not None:
+                next_link = current_link.next
+                current_link.delete_instance()
+                current_link = next_link
+                deleted += 1
+
+            user.playlist_head = current_link
+            user.save()
+
+        return deleted
+
+    def _push_to_playlist(self, user_id, keywords):
+        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
+        if count >= self._config_max_songs:
+            raise RuntimeError('Your playlist is full')
+
+        search_url = 'ytsearch:{}'.format(' '.join(keywords))
+        try:
+            result = self._ytdl.extract_info(search_url, download=False)
+            song_url = self._url_base['yt'].format(result['entries'][0]['id'])
+        except Exception:
+            raise RuntimeError('Search returned no results')
+
+        song = self._get_song(song_url)
+        # now we need to prepend it
+        with self._database.atomic():
+            # atomically re-check the condition for the length
+            if DBSongLink.select().where(DBSongLink.user == user_id).count() >= self._config_max_songs:
+                raise RuntimeError('Your playlist is full')
+
+            # now do the insertion
+            user = self._get_user(user_id)
+            link = DBSongLink.create(user=user_id, song=song.id, next=user.playlist_head_id)
+            user.playlist_head = link
+            user.save()
+
+        # return the id and title
+        return song.id, song.title
 
     def _shuffle_playlist(self, user_id):
         query = DBSongLink.select().where(DBSongLink.user == user_id)
