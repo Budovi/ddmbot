@@ -187,6 +187,7 @@ class Player:
         self._pcm_thread = PcmProcessor(bot_voice.encoder, self._config['pcm_pipe'], aac_server.connected,
                                         aac_server.internal_pipe_path, bot_voice._connected, bot_voice.play_audio,
                                         self._playback_ended_callback)
+        self._pcm_thread.volume = int(self._config['volume']) / 100
         self._pcm_thread.start()
 
         self._ffmpeg_command = 'ffmpeg -loglevel error -i {{}} -y -vn' \
@@ -292,6 +293,14 @@ class Player:
             if self.playing or self.streaming:
                 self._switch_state.set()
         return True
+
+    @property
+    def volume(self):
+        return self._pcm_thread.volume
+
+    @volume.setter
+    def volume(self, value):
+        self._pcm_thread.volume = value
 
     #
     # UserManager interface

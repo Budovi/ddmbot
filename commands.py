@@ -211,6 +211,18 @@ class CommandHandler:
     async def stream(self, url: str, name=None):
         await self._player.set_stream(url, name)
 
+    _volume_help = '*Operators only* Queries or changes the volume of the bot in the voice channel\n\nDirect ' \
+                   'stream is unaffected by this command. Valid values are between 0 and 200 [%].'
+
+    @privileged(True)
+    @dec.command(ignore_extra=False, help=_volume_help)
+    async def volume(self, volume: int=None):
+        if volume is not None:
+            self._player.volume = volume / 100
+            await self._message('Player volume set to {}%'.format(int(self._player.volume * 100)))
+        else:
+            await self._message('Player volume: {}%'.format(int(self._player.volume * 100)))
+
     #
     # User controls
     #
