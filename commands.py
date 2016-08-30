@@ -140,21 +140,29 @@ class CommandHandler:
     #
     # General bot commands
     #
+    _restart_help = '*Operators only* Restarts the bot\n\nThe configuration is reloaded from the configuration file.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_restart_help)
     async def restart(self):
         await self._message('Restarting...')
         self._restart_scheduled = True
         self._bot.loop.create_task(self._shutdown())
 
+    _shutdown_help = '*Operators only* Shuts down the bot\n\nYou need an access to the server bot runs on to launch ' \
+                     'it again.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_shutdown_help)
     async def shutdown(self):
         await self._message('Shutting down...')
         self._bot.loop.create_task(self._shutdown())
 
+    _ignore_help = '*Operators only* Adds the user specified into the list of ignored users\n\nThe user may be ' \
+                   'specified by it\'s username, nick or mention.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_ignore_help)
     async def ignore(self, member: discord.Member):
         if self._operator_role in member.roles:
             raise dec.UserInputError('User {} is an operator and cannot be ignored'.format(member))
@@ -162,8 +170,11 @@ class CommandHandler:
         self._ignorelist.add(member.id)
         await self._message('User {} has been added to the ignore list'.format(member))
 
+    _unignore_help = '*Operators only* Removes the user specified from the list of ignored users\n\nThe user may be ' \
+                     'specified by it\'s username, nick or mention.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_unignore_help)
     async def unignore(self, member: discord.Member):
         if member.id not in self._ignorelist:
             raise dec.UserInputError('User {} is not on the ignore list'.format(member))
@@ -174,28 +185,40 @@ class CommandHandler:
     #
     # Player controls
     #
+    _stop_help = '*Operators only* Changes the player\'s mode to STOPPED'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_stop_help)
     async def stop(self):
         await self._message('Player stopped')
         await self._player.set_stop()
 
+    _djmode_help = '*Operators only* Changes the player\'s mode to DJ MODE\n\nIn this mode, users can join the DJ ' \
+                   'queue and take turns in playing songs from their playlists.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_djmode_help)
     async def djmode(self):
         await self._message('Player switched to DJ mode')
         await self._player.set_djmode()
 
+    _stream_help = '*Operators only* Changes the player\'s state to STREAMING\n\nStream specified by the URL is ' \
+                   'played. If the playback fails or the stream ends, bot will change it\'s state to STOPPED.\n' \
+                   'No blacklisting, overplay protection or length limits are applied when using this command.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_stream_help)
     async def stream(self, url: str, name=None):
         await self._player.set_stream(url, name)
 
     #
     # User controls
     #
+    _join_help = 'Adds the user to the DJ queue\n\nYou must be listening to do this. When you stop listening, you ' \
+                 'will be removed from the queue automatically.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_join_help)
     async def join(self, ctx):
         if self._player.streaming or self._player.stopped:
             raise dec.UserInputError('Player is not in the DJ mode')
@@ -204,16 +227,21 @@ class CommandHandler:
         except ValueError:
             await self._bot.whisper('You have to be listening to join the DJ queue')
 
+    _leave_help = 'Removes the user from the DJ queue'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_leave_help)
     async def leave(self, ctx):
         try:
             await self._users.leave_queue(int(ctx.message.author.id))
         except ValueError:
             await self._bot.whisper('You are not in the DJ queue')
 
+    _kick_help = '*Operators only* Kicks the specified user from the DJ queue\n\nThe user may be specified by it\'s ' \
+                 'username, nick or mention.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_kick_help)
     async def kick(self, member: discord.Member):
         try:
             await self._users.leave_queue(int(member.id))
@@ -224,31 +252,45 @@ class CommandHandler:
     #
     # Song controls
     #
+    _hype_help = 'Hypes the currently playing song\n\nYou must be listening to vote. This command does not produce ' \
+                 'any message, it updates the song status message instead. You can vote only once. You cannot hype ' \
+                 'a song that was queued by you.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_hype_help)
     async def hype(self, ctx):
         if not self._users.is_listening(int(ctx.message.author.id)):
             raise dec.UserInputError('You must be listening to vote')
         await self._player.hype(int(ctx.message.author.id))
 
+    _skip_help = 'Votes to skip the song\n\nYou must be listening to vote. This command does not produce any ' \
+                 'message, it updates the song status message instead. Although skip votes are more private, they ' \
+                 'are logged and can be seen by the operators. When you vote to skip a song queued by you it is ' \
+                 'skipped instantly.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_skip_help)
     async def skip(self, ctx):
         if not self._users.is_listening(int(ctx.message.author.id)):
             raise dec.UserInputError('You must be listening to vote')
         await self._player.skip(int(ctx.message.author.id))
         await self._log('User {} has voted to skip'.format(ctx.message.author))
 
+    _direct_help = 'Requests a link to the direct audio stream\n\nInstructions are sent along with the link.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_direct_help)
     async def direct(self, ctx):
         url = await self._users.generate_url(int(ctx.message.author.id))
         await self._bot.whisper('Direct stream: {}\nPlease note that this link will expire in a few minutes. Also, you '
                                 'can only be connected from a single location, including a discord voice channel. If '
                                 'you are connected already, please disconnect before opening the playlist.'.format(url))
 
+    _forceskip_help = '*Operators only* Skips the song currently playing or terminates the stream\n\nPlease note ' \
+                      'that the song *won\'t* be blacklisted automatically.'
+
     @privileged(True)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_forceskip_help)
     async def forceskip(self, ctx):
         if await self._player.force_skip():
             await self._message('Skip forced by {}'.format(ctx.message.author.mention))
@@ -256,8 +298,12 @@ class CommandHandler:
     #
     # Playlist management
     #
+    _append_help = 'Inserts the specified songs to your playlist\n\nYoutube, Soundcloud and Bandcamp songs and ' \
+                   'playlists  are supported. You can specify multiple URLs or song IDs in the request. Songs are ' \
+                   'inserted to *the end* of your playlist.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_append_help)
     async def append(self, ctx, *uris: str):
         # print the disclaimer
         await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
@@ -273,8 +319,12 @@ class CommandHandler:
             reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
 
+    _prepend_help = 'Inserts the specified songs into your playlist\n\nYoutube, Soundcloud and Bandcamp songs and ' \
+                    'playlists are supported. You can specify multiple URLs or song IDs in the request. Songs are ' \
+                    'inserted to *the beginning* of your playlist.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_prepend_help)
     async def prepend(self, ctx, *uris: str):
         # print the disclaimer
         await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
@@ -290,8 +340,11 @@ class CommandHandler:
             reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
 
+    _pop_help = 'Removes the specified number of songs from your playlist\n\nIf no number is specified, one song is ' \
+                'removed. Songs are removed from *the beginning* of your playlist.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_pop_help)
     async def pop(self, ctx, count: int=1):
         real_count = await self._songs.pop_from_playlist(int(ctx.message.author.id), count)
 
@@ -300,8 +353,11 @@ class CommandHandler:
             reply += '\n{} song(s) could not be removed because your playlist is empty.'.format(count - real_count)
         await self._bot.whisper(reply)
 
+    _push_help = 'Search and prepend a single song\n\nSearches Youtube for the video with given keywords. The first ' \
+                 'returned result is inserted to *the beginning* of your playlist.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_push_help)
     async def push(self, ctx, *keywords: str):
         if not len(keywords):
             raise dec.UserInputError('You must specify at least one keyword to search')
@@ -310,20 +366,29 @@ class CommandHandler:
         await self._bot.whisper('**Song** [{}] {} **was added to your playlist. If this is not correct, you can remove'
                                 ' it by using the *pop* command.**'.format(song_id, song_title))
 
+    _clear_help = 'Clears your playlist\n\nAll songs will be removed from your playlist.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_clear_help)
     async def clear(self, ctx):
         await self._songs.clear_playlist(int(ctx.message.author.id))
         await self._bot.whisper('Your playlist was cleared')
 
+    _shuffle_help = 'Shuffles your playlist\n\nShuffles all the songs in your playlist in a random manner.'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_shuffle_help)
     async def shuffle(self, ctx):
         await self._songs.shuffle_playlist(int(ctx.message.author.id))
         await self._bot.whisper('Your playlist was shuffled')
 
+    _list_help = 'Lists the songs in your playlist\n\nDue to message length restrictions, up to 20 songs are ' \
+                 'returned for a single request. By default, the songs at the beginning of your playlist are ' \
+                 'returned. You can list the rest of the playlist by specifying the start with an argument (' \
+                 'e.g. 17 will list songs starting from 17th to 36th).'
+
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_list_help)
     async def list(self, ctx, start: int = 1):
         ordinal = lambda n: "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
 
@@ -342,8 +407,13 @@ class CommandHandler:
     #
     # Song management
     #
+    _blacklist_help = '*Operators only* Puts a song specified by it\'s ID to the blacklist\n\nSong ID can be ' \
+                      'located before the song name in the square brackets. It is included in the status message ' \
+                      'and all the listings.\nThis does not prevent inserting the song to the user\'s playlist, ' \
+                      'song is skipped when it is about to be played.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_blacklist_help)
     async def blacklist(self, which: int):
         try:
             await self._songs.add_to_blacklist(which)
@@ -351,7 +421,11 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been blacklisted'.format(which))
 
-    @dec.command(ignore_extra=False)
+    _unblacklist_help = '*Operators only* Removes a song specified by it\'s ID from the blacklist\n\nSong ID can be ' \
+                        'located before the song name in the square brackets. It is included in the status message ' \
+                        'and all the listings.'
+
+    @dec.command(ignore_extra=False, help=_unblacklist_help)
     async def unblacklist(self, which: int):
         try:
             await self._songs.remove_from_blacklist(which)
@@ -359,8 +433,14 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been removed from blacklist'.format(which))
 
+    _deduplicate_help = '*Operators only* Marks a song to be a duplicate of another song\n\nThis is a destructive ' \
+                        'operation. The duplicate is replaced by it\'s "original" just before playing. Tests for ' \
+                        'the blacklist, length and overplay protection are performed on the "original" song.\n' \
+                        'Song IDs can be located before the song name in the square brackets. You can use the ' \
+                        ' *search* command to find out the IDs.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_deduplicate_help)
     async def deduplicate(self, which: int, target: int):
         try:
             await self._songs.merge_songs(which, target)
@@ -368,8 +448,11 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as a duplicate of the song [{}]'.format(which, target))
 
+    _split_help = '*Operators only* Marks a given song as an original\n\nThis command can be used to revert some ' \
+                  'of the changes done by the *deduplicate* command.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_split_help)
     async def split(self, which: int):
         try:
             await self._songs.split_song(which)
@@ -377,8 +460,13 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as unique'.format(which))
 
+    _rename_help = '*Operators only* Changes the title of a specified song\n\nThis command does not update the ' \
+                   'status message. Please note that you should put the name in the quotes if it contains spaces. ' \
+                   'New name will be used next time the song is played.\nSong ID can be located before the song ' \
+                   'name in the square brackets. It is included in the status message and all the listings.'
+
     @privileged(True)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_rename_help)
     async def rename(self, which: int, new_title: str):
         try:
             await self._songs.rename_song(which, new_title)
@@ -386,8 +474,12 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been renamed to "{}"'.format(which, new_title))
 
+    _search_help = 'Searches the database for a song\n\nTitle and UURI are searched. All the keywords must match ' \
+                   'either the title or UURI. First 20 results are returned.\nThis command can be used to look up ' \
+                   'song IDs.'
+
     @privileged(False)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_search_help)
     async def search(self, *keywords: str):
         items = await self._songs.search_songs(keywords)
         if len(items) == 0:
@@ -397,8 +489,10 @@ class CommandHandler:
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
+    _info_help = 'Returns information about a song from the database\n\nMainly for debug purposes.'
+
     @privileged(False)
-    @dec.command(ignore_extra=False)
+    @dec.command(ignore_extra=False, help=_info_help)
     async def info(self, which: int):
         try:
             info = await self._songs.get_song_info(which)
@@ -432,9 +526,10 @@ class CommandHandler:
         with open(self._config['ignorelist_file'], 'w') as file:
             file.write(
                 '; DdmBot user ignore list file\n'
-                '; This file contains blacklisted users. You can modify this file offline, use commands to edit the blacklist with the bot directly.\n'
-                '; One user ID per line, lines starting with a semicolon are ignored. Text following user IDs is ignored too. File is automatically\n'
-                '; generated and overwritten on bot shutdown. You have been warned.\n'
+                '; This file contains blacklisted users. You can modify this file offline, use commands to edit the '
+                'blacklist with the bot directly.\n; One user ID per line, lines starting with a semicolon are '
+                'ignored. Text following user IDs is ignored too. File is automatically\n; generated and overwritten '
+                'on bot shutdown. You have been warned.\n'
             )
             for user_id in self._ignorelist:
                 member = discord.utils.get(self._bot.get_all_members(), id=user_id)

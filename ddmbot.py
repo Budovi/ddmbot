@@ -159,7 +159,7 @@ if __name__ == '__main__':
                 os.mkfifo(config['player']['pcm_pipe'], mode=0o600)
 
             # create bot instance and register event hooks
-            ddmbot = dec.Bot(command_prefix=config['commands']['delimiter'])
+            ddmbot = dec.Bot(command_prefix=config['commands']['delimiter'], pm_help=True)
             ddmbot.event(on_ready)
             ddmbot.event(on_message)
             ddmbot.event(on_error)
