@@ -316,17 +316,17 @@ class SongManager:
         # check the constrains
         # -- blacklist
         if song.is_blacklisted:
-            raise ValueError('Song [{}] is blacklisted'.format(song.id))
+            raise RuntimeError('Song [{}] is blacklisted'.format(song.id))
         # -- last played
         time_diff = datetime.now() - song.last_played
         if time_diff.total_seconds() < self._config_op_interval:
-            raise ValueError('Song [{}] has been played recently'.format(song.id))
+            raise RuntimeError('Song [{}] has been played recently'.format(song.id))
         # -- credits remaining
         if song.credit_count == 0:
-            raise ValueError('Song [{}] is overplayed'.format(song.id))
+            raise RuntimeError('Song [{}] is overplayed'.format(song.id))
         # -- check the song length
         if song.duration > self._config_max_duration:
-            raise ValueError('Song [{}]\'s length exceeds the limit'.format(song.id))
+            raise RuntimeError('Song [{}]\'s length exceeds the limit'.format(song.id))
 
         # fetch the URL using youtube_dl
         result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
@@ -443,7 +443,7 @@ class SongManager:
     def _append_to_playlist(self, user_id, uris):
         count = DBSongLink.select().where(DBSongLink.user == user_id).count()
         if count >= self._config_max_songs:
-            raise RuntimeError('User\'s playlist is full')
+            raise RuntimeError('Your playlist is full')
         # assembly the list of songs for insertion
         song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
         # now create the links in the database
@@ -453,7 +453,7 @@ class SongManager:
             # atomically re-check the condition
             to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
             if to_insert <= 0:
-                raise RuntimeError('User\'s playlist is full')
+                raise RuntimeError('Your playlist is full')
 
             connection_point = None
             if user.playlist_head_id is not None:
