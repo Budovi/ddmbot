@@ -78,6 +78,8 @@ class PcmProcessor(threading.Thread):
         while not self._end.is_set():
             # increment loop counter
             loops += 1
+            # set initial value for data length
+            data_len = 0
 
             # if it's not a buffering cycle read more data
             if buffering_cycles:
@@ -112,7 +114,7 @@ class PcmProcessor(threading.Thread):
                     else:
                         raise
 
-            # now we try to pass data to the output, if connected
+            # now we try to pass data to the output, if connected, we also send the silence (zero_data)
             if self._output_connected.is_set():
                 try:
                     os.write(self._out_pipe_fd, data)
@@ -122,8 +124,8 @@ class PcmProcessor(threading.Thread):
                     else:
                         raise
 
-            # and last but not least, discord output
-            if self._client_connected.is_set() and not buffering_cycles:
+            # and last but not least, discord output, this time, we can omit the silence (zero_data)
+            if self._client_connected.is_set() and data_len:
                 # adjust the volume
                 data = audioop.mul(data, 2, self._volume)
                 # call the callback
