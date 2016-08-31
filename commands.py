@@ -190,7 +190,6 @@ class CommandHandler:
     @privileged(True)
     @dec.command(ignore_extra=False, help=_stop_help)
     async def stop(self):
-        await self._message('Player stopped')
         await self._player.set_stop()
 
     _djmode_help = '*Operators only* Changes the player\'s mode to DJ MODE\n\nIn this mode, users can join the DJ ' \
