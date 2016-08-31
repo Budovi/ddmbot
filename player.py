@@ -412,7 +412,7 @@ class Player:
                 await self._users.leave_queue(dj)
                 await self._whisper(dj, 'Your playlist is empty. Please add more songs and rejoin the DJ queue.')
                 return None
-            except ValueError as e:  # there was a problem playing the song
+            except RuntimeError as e:  # there was a problem playing the song
                 await self._message('Song skipped: {}'.format(str(e)))
                 continue
             return song
