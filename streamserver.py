@@ -374,20 +374,25 @@ class StreamServer:
             # keep the list of disconnected listeners
             disconnected = list()
             # as this manipulates with connections, it is a critical section
-            log.debug('Trying to acquire lock in the cleanup loop')
             async with self._lock:
                 # iterate over all connections
                 for user, connection in self._connections.items():
                     try:
-                        await connection.response.drain()
+                        await asyncio.wait_for(connection.response.drain(), 0.001, loop=self._loop)
                     except (errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
                         log.debug('Connection broke with {}'.format(user))
+                        disconnected.append(user)
+                    except asyncio.TimeoutError:
+                        log.debug('Connection stalled with {}'.format(user))
                         disconnected.append(user)
 
                 # now we can pop disconnected listeners and notify the UserManager
                 for user in disconnected:
                     self._connections.pop(user)
-                    await self._users.remove_listener(user)
+                    try:
+                        await self._users.remove_listener(user)
+                    except ValueError:
+                        log.warning('Connection broke with {}, but the user was not listening'.format(user))
 
                 # cleanup must be done here because the original handler won't be resumed
                 if len(self._connections) == 0:
