@@ -576,7 +576,7 @@ class Player:
         self._switch_state.set()
 
     async def _delayed_dj_task(self):
-        await asyncio.sleep(15)
+        await asyncio.sleep(15, loop=self._bot.loop)
         self._dj_cooldown.set()
 
     async def _whisper(self, user_id, message):

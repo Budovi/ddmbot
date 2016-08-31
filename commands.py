@@ -560,5 +560,5 @@ class CommandHandler:
         return await self._bot.send_message(self._bot.log_channel, message)
 
     async def _shutdown(self):
-        await asyncio.sleep(2)
+        await asyncio.sleep(2, loop=self._bot.loop)
         await self._bot.logout()

@@ -365,7 +365,7 @@ class StreamServer:
     async def _cleanup_loop(self):
         while True:
             # sleep for small amount of time
-            await asyncio.sleep(1)
+            await asyncio.sleep(1, loop=self._loop)
 
             # keep the list of disconnected listeners
             disconnected = list()
