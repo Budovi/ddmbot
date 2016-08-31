@@ -375,7 +375,7 @@ class Player:
                           '**Queue:** {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
 
                 queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
-                stream_title = '{} queued by {}'.format(self._song_context.title, queued_by)
+                stream_title = '{}, queued by {}'.format(self._song_context.title, queued_by)
 
                 # check for the automatic skip
                 listener_skips = listeners & self._song_context.get_skip_set()
