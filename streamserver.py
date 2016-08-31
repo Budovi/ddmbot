@@ -45,6 +45,7 @@ class AacProcessor(threading.Thread):
 
     def run(self):
         loops = 0  # loop counter
+        input_not_ready = False  # to control log spam
         data_requested = self._frame_len  # to keep the alignment intact
 
         # capture the starting time
@@ -56,8 +57,8 @@ class AacProcessor(threading.Thread):
             # try to read a frame from the input -- should be there all the time
             try:
                 data = os.read(self._pipe_fd, data_requested)
-
-                # so we apparently got some data
+                # so we apparently got some data, clear the flag and calculate things
+                input_not_ready = False
                 data_len = len(data)
                 if data_len != self._frame_len:
                     log.warning('AacProcessor: Got partial buffer of size {}'.format(data_len))
@@ -71,7 +72,10 @@ class AacProcessor(threading.Thread):
                     data_requested = self._frame_len
             except OSError as e:
                 if e.errno == errno.EAGAIN:
-                    log.warning('AacProcessor: Buffer not ready')
+                    # prevent spamming the log with megabytes of text
+                    if not input_not_ready:
+                        log.error('AacProcessor: Buffer not ready')
+                        input_not_ready = True
                 else:
                     raise
 

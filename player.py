@@ -69,6 +69,7 @@ class PcmProcessor(threading.Thread):
     def run(self):
         loops = 0  # loop counter
         next_called = True  # variable to prevent constant calling of self._next()
+        output_congestion = False  # to control log spam
         buffering_cycles = 0
         cycles_in_second = 1 // self._frame_period
         zero_data = b'\0' * self._frame_len
@@ -118,11 +119,19 @@ class PcmProcessor(threading.Thread):
             if self._output_connected.is_set():
                 try:
                     os.write(self._out_pipe_fd, data)
+                    # data sent successfully, clear the congestion flag
+                    output_congestion = False
                 except OSError as e:
                     if e.errno == errno.EAGAIN:
-                        log.warning('PcmProcessor: Output pipe not ready, dropping frame')
+                        # prevent spamming the log with megabytes of text
+                        if not output_congestion:
+                            log.error('PcmProcessor: Output pipe not ready, dropping frame(s)')
+                            output_congestion = True
                     else:
                         raise
+            else:
+                # if we are not connected, there is no output congestion and the underlying buffer will be cleared
+                output_congestion = False
 
             # and last but not least, discord output, this time, we can omit the silence (zero_data)
             if self._client_connected.is_set() and data_len:
