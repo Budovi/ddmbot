@@ -67,8 +67,8 @@ class UserManager:
             timestamp, user = self._tokens[token]
             # only one connection is possible at the time
             # duplicate token will time out eventually
-            if user in self._listeners:
-                log.debug('Token {} is valid for user {}, but the user is connected already'.format(token, user))
+            if user in self._listeners and not self._listeners[user]['direct']:
+                log.debug('Token {} is valid for user {}, but the user is connected using discord'.format(token, user))
                 return None
             log.debug('Token {} verification passed, associated user: {}'.format(token, user))
             return user
@@ -99,16 +99,11 @@ class UserManager:
         async with self._lock:
             if discord_id in self._listeners and token is None and self._listeners[discord_id]['direct']:
                 # someone using a direct stream switches over to the discord voice
+                log.debug('Switching user {} from direct to discord stream'.format(discord_id))
                 self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
 
             self._listeners[discord_id] = {'active': current_time, 'direct': token is not None, 'notified_ds': False,
                                            'notified_dj': False}
-            # invalidate the token
-            if token is not None:
-                try:
-                    self._tokens.pop(token)
-                except KeyError:
-                    log.warning('Adding listener {} with an invalid token, race condition occurred'.format(discord_id))
 
             self._player.users_changed()
 
@@ -147,7 +142,7 @@ class UserManager:
                 self._player.cooldown_reset()
             self._player.users_changed()
 
-    async def generate_url(self, discord_id):
+    async def generate_urls(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
         current_time = datetime.datetime.now()
         token = ''.join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(64))
@@ -155,7 +150,7 @@ class UserManager:
             # key collisions are possible, but should be negligible
             log.debug('Added token {} for user {}'.format(token, discord_id))
             self._tokens[token] = (current_time, discord_id)
-            return self._aac_server.url_format.format(token)
+            return self._aac_server.playlist_url_format.format(token), self._aac_server.stream_url_format.format(token)
 
     #
     # API for activity update

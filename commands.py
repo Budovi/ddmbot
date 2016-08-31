@@ -292,10 +292,12 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_direct_help)
     async def direct(self, ctx):
-        url = await self._users.generate_url(int(ctx.message.author.id))
-        await self._bot.whisper('Direct stream: {}\nPlease note that this link will expire in a few minutes. Also, you '
-                                'can only be connected from a single location, including a discord voice channel. If '
-                                'you are connected already, please disconnect before opening the playlist.'.format(url))
+        playlist, direct = await self._users.generate_urls(int(ctx.message.author.id))
+        message = 'Playlist link: {}\nDirect link: `{}`\n\nPlease note that these links will expire in a few ' \
+                  'minutes. Also, you can only be connected from a single location, including a discord voice ' \
+                  'channel. If you are in the voice channel already, please disconnect before proceeding.'
+
+        await self._bot.whisper(message.format(playlist, direct))
 
     _forceskip_help = '*Operators only* Skips the song currently playing or terminates the stream\n\nPlease note ' \
                       'that the song *won\'t* be blacklisted automatically.'

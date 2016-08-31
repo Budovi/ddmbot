@@ -86,12 +86,12 @@ class AacProcessor(threading.Thread):
 
 
 class ConnectionInfo:
-    __slots__ = ['_response', '_meta', '_event', '_init']
+    __slots__ = ['_response', '_meta', '_lock', '_init']
 
     def __init__(self, response: web.StreamResponse, meta: bool, loop: asyncio.AbstractEventLoop):
         self._response = response
         self._meta = meta
-        self._event = asyncio.Event(loop=loop)
+        self._lock = asyncio.Lock(loop=loop)
         self._init = True
 
     @property
@@ -109,11 +109,15 @@ class ConnectionInfo:
             return True
         return False
 
+    async def prepare(self):
+        if not self._lock.locked():
+            await self._lock.acquire()
+
     async def wait(self):
-        await self._event.wait()
+        await self._lock.acquire()
 
     def terminate(self):
-        self._event.set()
+        self._lock.release()
 
 
 class StreamServer:
@@ -158,10 +162,16 @@ class StreamServer:
                 self._stream_response_headers[icy_name] = config[config_name]
 
     @property
-    def url_format(self):
+    def playlist_url_format(self):
         # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
         return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
                                                   self._config['playlist_path'])
+
+    @property
+    def stream_url_format(self):
+        # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
+        return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
+                                                  self._config['stream_path'])
 
     #
     # Resource management wrappers
@@ -262,13 +272,14 @@ class StreamServer:
             response_headers['Icy-MetaInt'] = str(self._frame_len)
             meta = True
 
-        log.debug('New stream request from {}, ICY-METADATA={}'.format(user, meta))
+        log.debug('Valid stream request from {}, ICY-METADATA={}'.format(user, meta))
 
         # create response StreamResponse object
         response = web.StreamResponse(headers=response_headers)
         await response.prepare(request)
         # construct ConnectionInfo object
         connection = ConnectionInfo(response, meta, self._loop)
+        await connection.prepare()
 
         # critical section -- we are manipulating the connections
         async with self._lock:
@@ -278,7 +289,6 @@ class StreamServer:
                 # spawn cleanup task
                 self._cleanup_task = self._loop.create_task(self._cleanup_loop())
                 # spawn ffmpeg process
-                #args = shlex.split(self._ffmpeg_command.format(shlex.quote(url)))
                 try:
                     self._ffmpeg = subprocess.Popen(self._ffmpeg_args)
                 except FileNotFoundError as e:
@@ -294,6 +304,7 @@ class StreamServer:
 
             elif user in self._connections:
                 # break the existing connection
+                log.debug('Previous connection for user {} found, signalling to terminate'.format(user))
                 self._connections[user].terminate()
 
             # add the connection object to the _connections dictionary
@@ -317,7 +328,6 @@ class StreamServer:
 
     async def _handle_new_playlist(self, request):
         # TODO: handle URL encoding
-        log.debug('New playlist request, query string: {}'.format(request.query_string))
         body = self._playlist_file.format(request.query_string)
         response = web.Response(text=body, headers=self._playlist_response_headers)
         return response
