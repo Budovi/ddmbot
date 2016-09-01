@@ -148,12 +148,12 @@ class StreamServer:
         self._current_meta = b'\0'
 
         # response headers and payload assembly
-        self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot v:0.1 alpha', 'Content-type':
+        self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot streaming server', 'Content-type':
                                            'audio/mpegurl'}
         self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{}\r\nhttp://{}:{}{}?{{}}'\
             .format(config['name'], config['hostname'], config['port'], config['stream_path'])
         self._stream_response_headers = {'Cache-Control': 'no-cache', 'Connection': 'close', 'Pragma': 'no-cache',
-                                         'Server': 'DdmBot v:0.1 alpha', 'Content-Type': 'audio/aac',
+                                         'Server': 'DdmBot streaming server', 'Content-Type': 'audio/aac',
                                          'Icy-BR': config['bitrate'], 'Icy-Pub': '0'}
 
         for icy_name, config_name in (('Icy-Name', 'name'), ('Icy-Description', 'description'), ('Icy-Genre', 'genre'),
