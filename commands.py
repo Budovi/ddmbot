@@ -328,7 +328,7 @@ class CommandHandler:
         reply = '**{} song(s) appended**\n**{} insertions failed**'.format(inserted, len(error_list))
         if truncated:
             reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
-        if len(error_list) > 0:
+        if error_list:
             reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
 
@@ -349,7 +349,7 @@ class CommandHandler:
         reply = '**{} song(s) prepended**\n**{} insertions failed**'.format(inserted, len(error_list))
         if truncated:
             reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
-        if len(error_list) > 0:
+        if error_list:
             reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(error_list[:10])
         await self._bot.whisper(reply)
 
@@ -372,7 +372,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_push_help)
     async def push(self, ctx, *keywords: str):
-        if not len(keywords):
+        if not keywords:
             raise dec.UserInputError('You must specify at least one keyword to search')
 
         song_id, song_title = await self._songs.push_to_playlist(int(ctx.message.author.id), keywords)
@@ -406,7 +406,7 @@ class CommandHandler:
         ordinal = lambda n: "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
 
         items = await self._songs.list_playlist(int(ctx.message.author.id), start - 1, 20)
-        if len(items) == 0:
+        if not items:
             if start == 1:
                 await self._bot.whisper('Your playlist is empty')
             else:
@@ -495,7 +495,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_search_help)
     async def search(self, *keywords: str):
         items = await self._songs.search_songs(keywords)
-        if len(items) == 0:
+        if not items:
             await self._bot.whisper('Search for songs with keywords {} has not returned any result'.format(keywords))
             return
         reply = '**First 20 songs matching the keywords {}:**\n **>** '.format(keywords) + \

@@ -283,7 +283,7 @@ class StreamServer:
 
         # critical section -- we are manipulating the connections
         async with self._lock:
-            if len(self._connections) == 0:
+            if not self._connections:
                 # first listener needs to initialize everything
                 log.debug('First listener initialization')
                 # spawn cleanup task
@@ -405,6 +405,6 @@ class StreamServer:
                         log.warning('Connection broke with {}, but the user was not listening'.format(user))
 
                 # cleanup must be done here because the original handler won't be resumed
-                if len(self._connections) == 0:
+                if not self._connections:
                     self._last_listener_cleanup()
                     return

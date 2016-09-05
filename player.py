@@ -348,7 +348,7 @@ class Player:
             # get all the display names mapping
             all_ids = listeners | hypes | {self._song_context.user_id} if self.playing else listeners
             names = dict()
-            if len(all_ids) > 0:
+            if all_ids:
                 for member in self._bot.get_all_members():
                     int_id = int(member.id)
                     if int_id in all_ids:

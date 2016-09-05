@@ -364,7 +364,7 @@ class SongManager:
 
         # prepare all the other users which may not exist in the database
         user_dict_list = [{'discord_id': user_id} for user_id in (song_ctx.get_hype_set() | song_ctx.get_skip_set())]
-        if len(user_dict_list):
+        if user_dict_list:
             DBUser.insert_many(user_dict_list).on_conflict('ignore').execute()
         # now do the votes query which will update _given stats
         hypes_query = DBUser.update(hype_count_given=DBUser.hype_count_given + 1)\

@@ -77,11 +77,11 @@ class UserManager:
     # API for the player
     #
     def someone_listening(self):
-        return len(self._listeners) > 0
+        return bool(self._listeners)
 
     async def get_next_dj(self):
         async with self._lock:
-            if len(self._queue) == 0:
+            if not self._queue:
                 return None
             discord_id = self._queue.popleft()
             self._queue.append(discord_id)
@@ -138,7 +138,7 @@ class UserManager:
             except ValueError:
                 raise ValueError('User is not in queue')
 
-            if len(self._queue) == 0:
+            if not self._queue:
                 self._player.cooldown_reset()
             self._player.users_changed()
 
@@ -229,8 +229,7 @@ class UserManager:
                     self._listeners.pop(listener)
 
             # now update the player
-            if len(remove_djs):
-                if len(self._queue) == 0:
+            if remove_djs and not self._queue:
                     self._player.cooldown_reset()
-            if len(remove_listeners) or len(remove_djs):
+            if remove_listeners or remove_djs:
                 self._player.users_changed()
