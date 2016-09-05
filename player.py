@@ -15,6 +15,8 @@ from contextlib import suppress
 import discord.utils
 import youtube_dl
 
+from songmanager import UnavailableSongError
+
 # set up the logger
 log = logging.getLogger('ddmbot.player')
 
@@ -432,6 +434,11 @@ class Player:
             except RuntimeError as e:  # there was a problem playing the song
                 await self._message('Song skipped: {}'.format(str(e)))
                 continue
+            except UnavailableSongError as e:
+                await self._log('Song [{}] *{}* was automatically blacklisted due to a download error'
+                                .format(e.song_id, e.song_title))
+                await self._message('Song skipped: {}'.format(str(e)))
+                continue
             return song
         await self._users.leave_queue(dj)
         await self._whisper(dj, 'Please try to fix your playlist and rejoin the queue')
@@ -551,8 +558,10 @@ class Player:
                     # ok, now we should just pick a song and play it
                     try:
                         self._song_context = await self._songs.get_autoplaylist_song()
-                    except RuntimeError:
-                        # if the info download failed, we will just try next time... without the timeout
+                    except UnavailableSongError as e:
+                        # we need to log this to the logging channel
+                        await self._log('Song [{}] *{}* was automatically blacklisted due to a download error'
+                                        .format(e.song_id, e.song_title))
                         continue
 
                     if self._song_context is None:
@@ -624,3 +633,6 @@ class Player:
 
     async def _message(self, message):
         return await self._bot.send_message(self._bot.text_channel, message)
+
+    async def _log(self, message):
+        return await self._bot.send_message(self._bot.log_channel, message)

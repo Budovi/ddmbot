@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import logging
 import random
 import re
 from contextlib import suppress
@@ -7,6 +8,9 @@ from datetime import datetime, timedelta
 
 import peewee
 import youtube_dl
+
+# set up the logger
+log = logging.getLogger('ddmbot.songmanager')
 
 # database object
 # TODO: can we get rid of this 'ugly global'?
@@ -68,6 +72,21 @@ class DBUser(DBSchema):
 
 
 DeferredDBUser.set_model(DBUser)
+
+
+class UnavailableSongError(Exception):
+    def __init__(self, *args, song_id=None, song_title=None):
+        super().__init__(*args)
+        self._song_id = song_id
+        self._song_title = song_title
+
+    @property
+    def song_id(self):
+        return self._song_id
+
+    @property
+    def song_title(self):
+        return self._song_title
 
 
 class SongContext:
@@ -328,7 +347,7 @@ class SongManager:
         # check the constrains
         # -- blacklist
         if song.is_blacklisted:
-            raise RuntimeError('Song [{}] is blacklisted'.format(song.id))
+            raise RuntimeError('Song [{}] is unavailable or blacklisted by an operator'.format(song.id))
         # -- last played
         time_diff = datetime.now() - song.last_played
         if time_diff.total_seconds() < self._config_op_interval:
@@ -343,9 +362,12 @@ class SongManager:
         # fetch the URL using youtube_dl
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:
-            # TODO: log the event and make this information non-volatile
-            raise RuntimeError('Download of the song [{}] failed'.format(song.id))
+        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+            log.warning('Download of the song [{}] failed, blacklisting'.format(song.id), exc_info=True)
+            song.is_blacklisted = True
+            song.save()
+            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
+                                       song_title=song.title)
         return SongContext(user_id, song.id, song.title, result['url'])
 
     def _update_stats(self, song_ctx: SongContext):
@@ -399,9 +421,12 @@ class SongManager:
 
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:
-            # TODO: log the event and make this information non-volatile
-            raise RuntimeError('Download of the song [{}] failed'.format(song.id))
+        except youtube_dl.DownloadError as e:  # blacklist the song and raise an exception
+            log.warning('Download of the song [{}] failed, blacklisting'.format(song.id), exc_info=True)
+            song.is_blacklisted = True
+            song.save()
+            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
+                                       song_title=song.title)
         return SongContext(None, song.id, song.title, result['url'])
 
     def _list_playlist(self, user_id, offset, limit):

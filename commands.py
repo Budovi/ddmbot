@@ -93,7 +93,7 @@ class CommandHandler:
                 raise InvalidChannel('Privileged commands must be used inside the {} channel'
                                      .format(self._bot.text_channel.mention))
             if self._operator_role not in ctx.message.author.roles:
-                raise NotAuthorized('You don\'t have a permission to use the *{}* command.'
+                raise NotAuthorized('You don\'t have a permission to use the *{}* command'
                                     .format(ctx.command))
 
         return True
