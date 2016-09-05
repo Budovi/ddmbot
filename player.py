@@ -532,7 +532,11 @@ class Player:
                         continue
 
                     # ok, now we should just pick a song and play it
-                    self._song_context = await self._songs.get_autoplaylist_song()
+                    try:
+                        self._song_context = await self._songs.get_autoplaylist_song()
+                    except RuntimeError:
+                        # if the info download failed, we will just try next time... without the timeout
+                        continue
 
                     if self._song_context is None:
                         # if we did not succeed with automatic playlist, we're... eh doomed?
