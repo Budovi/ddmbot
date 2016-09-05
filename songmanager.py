@@ -341,7 +341,11 @@ class SongManager:
             raise RuntimeError('Song [{}]\'s length exceeds the limit'.format(song.id))
 
         # fetch the URL using youtube_dl
-        result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        try:
+            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        except youtube_dl.DownloadError:
+            # TODO: log the event and make this information non-volatile
+            raise RuntimeError('Download of the song [{}] failed'.format(song.id))
         return SongContext(user_id, song.id, song.title, result['url'])
 
     def _update_stats(self, song_ctx: SongContext):
@@ -393,7 +397,11 @@ class SongManager:
             # there is no song conforming to the autoplaylist conditions
             return None
 
-        result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        try:
+            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        except youtube_dl.DownloadError:
+            # TODO: log the event and make this information non-volatile
+            raise RuntimeError('Download of the song [{}] failed'.format(song.id))
         return SongContext(None, song.id, song.title, result['url'])
 
     def _list_playlist(self, user_id, offset, limit):
@@ -438,17 +446,17 @@ class SongManager:
                             song_list.append(self._get_song(entry['url']))
                         except ValueError as e:
                             error_list.append(str(e))
-                        except youtube_dl.utils.DownloadError as e:
-                            error_list.append('{}, while processing {}'.format(str(e), entry['url']))
-                except youtube_dl.utils.DownloadError as e:
-                    error_list.append('{}, while processing list {}'.format(str(e), uri))
+                        except youtube_dl.DownloadError as e:
+                            error_list.append('Inserting `{}` from playlist failed: {}'.format(entry['url'], str(e)))
+                except youtube_dl.DownloadError as e:
+                    error_list.append('Processing list `{}` failed: {}'.format(uri, str(e)))
             else:  # should be a single song
                 try:  # youtube_dl or regex matching can fail
                     song_list.append(self._get_song(uri))
                 except ValueError as e:
                     error_list.append(str(e))
-                except youtube_dl.utils.DownloadError as e:
-                    error_list.append('{}, while processing {}'.format(str(e), uri))
+                except youtube_dl.DownloadError as e:
+                    error_list.append('Inserting `{}` failed: {}'.format(uri, str(e)))
 
         return song_list, error_list, False
 
