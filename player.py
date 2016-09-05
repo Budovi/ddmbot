@@ -2,6 +2,7 @@ import audioop
 import asyncio
 import enum
 import errno
+import fcntl
 import functools
 import logging
 import os
@@ -17,10 +18,14 @@ import youtube_dl
 # set up the logger
 log = logging.getLogger('ddmbot.player')
 
+# fcntl constants, extracted from linux API headers
+FCNTL_F_LINUX_BASE = 1024
+FCNTL_F_SETPIPE_SZ = FCNTL_F_LINUX_BASE + 7
+
 
 class PcmProcessor(threading.Thread):
-    def __init__(self, encoder, input_pipe, output_connected, output_pipe, client_connected, client_callback,
-                 next_callback):
+    def __init__(self, encoder, pipe_sizes, input_pipe, output_connected, output_pipe, client_connected,
+                 client_callback, next_callback):
         if not callable(client_callback):
             raise TypeError('Client callback must be a callable object')
         if not callable(next_callback):
@@ -36,6 +41,15 @@ class PcmProcessor(threading.Thread):
 
         self._output_connected = output_connected
         self._out_pipe_fd = os.open(output_pipe, os.O_WRONLY | os.O_NONBLOCK)
+
+        try:
+            fcntl.fcntl(self._in_pipe_fd, FCNTL_F_SETPIPE_SZ, pipe_sizes)
+            fcntl.fcntl(self._in_pipe_fd, FCNTL_F_SETPIPE_SZ, pipe_sizes)
+        except OSError as e:
+            if e.errno == 1:
+                raise RuntimeError('Required PCM pipe size is over the system limit, see \'pcm_pipe_size\' in the '
+                                   '[player] section of the configuration file') from e
+            raise e
 
         self._client_connected = client_connected
         self._play = client_callback
@@ -157,6 +171,9 @@ class PlayerState(enum.Enum):
 class Player:
     def __init__(self, config, bot, users, songs):
         self._config_skip_ratio = float(config['skip_ratio'])
+        self._config_pipe_size = int(config['pcm_pipe_size'])
+        if self._config_pipe_size > 2**31 or self._config_pipe_size <= 0:
+            raise ValueError('Provided \'pcm_pipe_size\' from the [player] configuration is invalid')
         self._config = config
         self._bot = bot
         self._users = users
@@ -195,9 +212,9 @@ class Player:
         self._meta_callback = aac_server.set_meta
 
         # TODO: replace protected member access with a method VoiceClient.is_connected()
-        self._pcm_thread = PcmProcessor(bot_voice.encoder, self._config['pcm_pipe'], aac_server.connected,
-                                        aac_server.internal_pipe_path, bot_voice._connected, bot_voice.play_audio,
-                                        self._playback_ended_callback)
+        self._pcm_thread = PcmProcessor(bot_voice.encoder, self._config_pipe_size, self._config['pcm_pipe'],
+                                        aac_server.connected, aac_server.internal_pipe_path, bot_voice._connected,
+                                        bot_voice.play_audio, self._playback_ended_callback)
         self._pcm_thread.volume = int(self._config['volume']) / 100
         self._pcm_thread.start()
 
