@@ -427,8 +427,13 @@ class Player:
         except youtube_dl.DownloadError as e:
             await self._message('Failed to obtain stream information: {}'.format(str(e)))
             return False
-        if self._stream_name is None:
-            self._stream_name = info['title'] if len(info['title']) > 0 else '<untitled>'
+        if not self._stream_name:
+            if 'twitch' in self._stream_url:  # TODO: regex should be much better
+                self._stream_name = info.get('description')
+            else:
+                self._stream_name = info.get('title')
+            if not self._stream_name:
+                self._stream_name = '<untitled stream>'
         if 'url' not in info:
             await self._message('Failed to extract stream URL, is the link valid?')
             return False
