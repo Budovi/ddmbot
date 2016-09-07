@@ -521,6 +521,7 @@ class Player:
             #
             elif self.waiting:
                 self._next_state = PlayerState.DJ_PLAYING
+                self._dj_cooldown.clear()
                 # there is not much to do except wait
 
             elif self.cooldown:
