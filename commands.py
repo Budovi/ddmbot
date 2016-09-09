@@ -554,11 +554,11 @@ class CommandHandler:
     #
     # Helper methods
     #
-    async def _message(self, message):
-        return await self._bot.send_message(self._bot.text_channel, message)
+    def _message(self, message):
+        return self._bot.send_message(self._bot.text_channel, message)
 
-    async def _log(self, message):
-        return await self._bot.send_message(self._bot.log_channel, message)
+    def _log(self, message):
+        return self._bot.send_message(self._bot.log_channel, message)
 
     async def _shutdown(self):
         await asyncio.sleep(2, loop=self._bot.loop)

@@ -626,14 +626,14 @@ class Player:
         await asyncio.sleep(15, loop=self._bot.loop)
         self._dj_cooldown.set()
 
-    async def _whisper(self, user_id, message):
+    def _whisper(self, user_id, message):
         user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
         if user is None:
             return
-        return await self._bot.send_message(user, message)
+        return self._bot.send_message(user, message)
 
-    async def _message(self, message):
-        return await self._bot.send_message(self._bot.text_channel, message)
+    def _message(self, message):
+        return self._bot.send_message(self._bot.text_channel, message)
 
-    async def _log(self, message):
-        return await self._bot.send_message(self._bot.log_channel, message)
+    def _log(self, message):
+        return self._bot.send_message(self._bot.log_channel, message)
