@@ -93,7 +93,7 @@ async def on_ready():
             await stream.init(users, voice_client)
 
             log.info('Initializing player')
-            player.init(voice_client, stream)
+            await player.init(voice_client, stream)
 
             await ddmbot.send_message(ddmbot.text_channel, 'DdmBot ready')
             log.info('Initialization done')

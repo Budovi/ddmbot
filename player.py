@@ -208,7 +208,7 @@ class Player:
     #
     # Resource management wrappers
     #
-    def init(self, bot_voice, aac_server):
+    async def init(self, bot_voice, aac_server):
         self._voice_client = bot_voice
         self._meta_callback = aac_server.set_meta
 
@@ -222,6 +222,13 @@ class Player:
         self._ffmpeg_command = 'ffmpeg -loglevel error -i {{}} -y -vn' \
                                ' -f s16le -ar {} -ac {} {}' \
             .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['pcm_pipe']))
+
+        await self._transition_lock.acquire()
+        # now that we have the lock, set the initial state, this will prevent any interference before starting the FSM
+        if self._config['initial_state'] == 'playing':
+            self._next_state = PlayerState.DJ_PLAYING
+        elif self._config['initial_state'] != 'stopped':
+            log.error('Initial state is invalid, assuming \'stopped\'')
         self._player_task = self._bot.loop.create_task(self._player_fsm())
 
     async def cleanup(self):
@@ -483,7 +490,8 @@ class Player:
     # Player FSM
     #
     async def _player_fsm(self):
-        await self._transition_lock.acquire()
+        if not self._transition_lock.locked():
+            raise RuntimeError('Transaction lock must be acquired before creating _player_fsm task')
         nothing_to_play = False
         while True:
             #
