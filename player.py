@@ -417,7 +417,7 @@ class Player:
 
             # check for the automatic skip
             listener_skips = listeners & self._song_context.get_skip_set()
-            if len(listener_skips) >= self._config_skip_ratio * len(listeners):
+            if listeners and len(listener_skips) >= self._config_skip_ratio * len(listeners):
                 await self._bot.send_message(self._bot.text_channel, 'Community voted to skip')
                 self._switch_state.set()
 
