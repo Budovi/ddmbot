@@ -149,8 +149,8 @@ class PcmProcessor(threading.Thread):
                 # if we are not connected, there is no output congestion and the underlying buffer will be cleared
                 output_congestion = False
 
-            # and last but not least, discord output, this time, we can omit the silence (zero_data)
-            if self._client_connected.is_set() and data_len:
+            # and last but not least, discord output, this time, we can (should) omit partial frames or zero data
+            if self._client_connected.is_set() and data_len == self._frame_len:
                 # adjust the volume
                 data = audioop.mul(data, 2, self._volume)
                 # call the callback
