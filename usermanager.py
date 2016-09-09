@@ -128,7 +128,7 @@ class UserManager:
             self._queue.append(discord_id)
 
             if len(self._queue) == 1:
-                self._player.cooldown_set()
+                self._bot.loop.create_task(self._player.cooldown_skip())
             self._player.users_changed()
 
     async def leave_queue(self, discord_id):
@@ -230,6 +230,6 @@ class UserManager:
 
             # now update the player
             if remove_djs and not self._queue:
-                    self._player.cooldown_reset()
+                self._player.cooldown_reset()
             if remove_listeners or remove_djs:
                 self._player.users_changed()

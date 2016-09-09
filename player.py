@@ -186,9 +186,8 @@ class Player:
         self._next_state = PlayerState.STOPPED
         # and state transitions are locked
         self._transition_lock = asyncio.Lock(loop=bot.loop)
-
         self._switch_state = asyncio.Event(loop=bot.loop)
-        self._dj_cooldown = asyncio.Event(loop=bot.loop)
+        self._apply_cooldown = True
 
         self._song_context = None
 
@@ -269,14 +268,10 @@ class Player:
     # Player controls
     #
     async def set_stop(self):
-        if self.cooldown:
-            self._next_state = PlayerState.STOPPED
-            self._dj_cooldown.set()
-        else:
-            async with self._transition_lock:
-                if not self.stopped:
-                    self._next_state = PlayerState.STOPPED
-                    self._switch_state.set()
+        async with self._transition_lock:
+            if not self.stopped:
+                self._next_state = PlayerState.STOPPED
+                self._switch_state.set()
 
     async def set_djmode(self):
         async with self._transition_lock:
@@ -287,30 +282,26 @@ class Player:
     async def set_stream(self, stream_url, stream_name=None):
         self._stream_url = stream_url
         self._stream_name = stream_name
-        if self.cooldown:
+        async with self._transition_lock:
             self._next_state = PlayerState.STREAMING
-            self._dj_cooldown.set()
-        else:
-            async with self._transition_lock:
-                self._next_state = PlayerState.STREAMING
-                self._switch_state.set()
+            self._switch_state.set()
 
     async def hype(self, user_id):
-        if self._transition_lock.locked():
+        if self._transition_lock.locked():  # TODO: change to try-lock construct, this is not atomic
             return
         async with self._transition_lock:
             if self.playing:
                 self._song_context.hype(user_id)
-                self._bot.loop.create_task(self._update_status())
+                await self._update_status()
 
     async def skip(self, user_id):
-        if self._transition_lock.locked():
+        if self._transition_lock.locked():  # TODO: change to try-lock construct, this is not atomic
             return
         async with self._transition_lock:
             try:
                 if self.playing:
                     self._song_context.skip(user_id)
-                    self._bot.loop.create_task(self._update_status())
+                    await self._update_status()
             except ValueError:
                 # skipped by the user playing
                 await self._message('Song skipped by the DJ')
@@ -335,11 +326,13 @@ class Player:
     #
     # UserManager interface
     #
-    def cooldown_set(self):
-        self._dj_cooldown.set()
+    async def cooldown_skip(self):
+        async with self._transition_lock:
+            if self.cooldown:
+                self._switch_state.set()
 
     def cooldown_reset(self):
-        self._dj_cooldown.clear()
+        self._apply_cooldown = True
 
     def users_changed(self):
         self._bot.loop.create_task(self._users_changed())
@@ -353,75 +346,81 @@ class Player:
                 # we were probably waiting for the first listener, so try to leave this state
                 self._switch_state.set()
                 return
-            if self.stopped:
+            if self.stopped or self.cooldown:
+                # in those states there is nothing in the status message to update
                 return
-        # if we fell out here that means we are in a state where may be appropriate to update a message
-        await self._update_status()
+            # we are in a state where may be appropriate to update a status message
+            await self._update_status()
 
     async def _update_status(self):
-        log.debug('Waiting for lock from _update_status')
-        async with self._transition_lock:
-            listeners, djs = await self._users.get_state()
-            hypes = self._song_context.get_hype_set() if self.playing else set()
+        if not self._transition_lock.locked():
+            raise RuntimeError('Update status may only be called with transition lock acquired')
 
-            # get all the display names mapping
-            all_ids = listeners | hypes | {self._song_context.user_id} if self.playing else listeners
-            names = dict()
-            if all_ids:
-                for member in self._bot.get_all_members():
-                    int_id = int(member.id)
-                    if int_id in all_ids:
-                        names[int_id] = member.display_name
-                        # break if we found all of them
-                        if len(names) == len(all_ids):
-                            break
+        listeners, djs = await self._users.get_state()
+        hypes = self._song_context.get_hype_set() if self.playing else set()
 
-            listeners_str = ', '.join([names[ids] for ids in listeners])
-            message = None
-            stream_title = None
+        # get all the display names mapping
+        all_ids = listeners | hypes | {self._song_context.user_id} if self.playing else listeners
+        names = dict()
+        if all_ids:
+            for member in self._bot.get_all_members():
+                int_id = int(member.id)
+                if int_id in all_ids:
+                    names[int_id] = member.display_name
+                    # break if we found all of them
+                    if len(names) == len(all_ids):
+                        break
 
-            if self.playing:
-                # assemble the rest of the information
-                hypes_str = ', '.join([names[ids] for ids in hypes])
-                djs_str = ' -> '.join([names[ids] for ids in djs])
-                queued_by = 'auto-playlist' if self._song_context.user_id is None else \
-                    '<@{}>'.format(self._song_context.user_id)
+        listeners_str = ', '.join([names[ids] for ids in listeners])
+        message = None
+        stream_title = None
 
-                message = '**Playing:** [{0.song_id}] {0.title}, **queued by** {1}\n' \
-                          '**Hypes:** {0.hype_count} ({2})\n' \
-                          '**Skip votes:** {0.skip_votes}\n' \
-                          '**Listeners:** {3}\n' \
-                          '**Queue:** {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
+        if self.stopped:
+            message = '**Player is stopped**'
+            stream_title = 'Awkward silence'
 
-                queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
-                stream_title = '{}, queued by {}'.format(self._song_context.title, queued_by)
+        elif self.streaming:
+            message = '**Playing stream:** {}\n' \
+                      '**Listeners:** {}'.format(self._stream_name, listeners_str)
+            stream_title = self._stream_name
 
-                # check for the automatic skip
-                listener_skips = listeners & self._song_context.get_skip_set()
-                if len(listener_skips) > self._config_skip_ratio * len(listeners):
-                    await self._bot.send_message(self._bot.text_channel, 'Community voted to skip')
-                    self._switch_state.set()
+        elif self.waiting:
+            message = '**Waiting for the first listener**'
+            stream_title = 'Hold on a second...'
 
-            elif self.streaming:
-                message = '**Playing stream:** {}\n' \
-                          '**Listeners:** {}'.format(self._stream_name, listeners_str)
-                stream_title = self._stream_name
+        elif self.cooldown:
+            message = '**Waiting for DJs**, automatic playlist will be initiated in a few seconds'
+            stream_title = 'Almost there!'
 
-            elif self.stopped:
-                message = '**Player is stopped**'
-                stream_title = 'Awkward silence'
+        elif self.playing:
+            # assemble the rest of the information
+            hypes_str = ', '.join([names[ids] for ids in hypes])
+            djs_str = ' -> '.join([names[ids] for ids in djs])
+            queued_by = 'auto-playlist' if self._song_context.user_id is None else \
+                '<@{}>'.format(self._song_context.user_id)
 
-            if message:
-                if self._status_message:
-                    self._status_message = await self._bot.edit_message(self._status_message, message)
-                    log.debug("Status message updated")
-                else:
-                    self._status_message = await self._message(message)
-                    await self._meta_callback(stream_title)
-                    log.debug("New status message created")
+            message = '**Playing:** [{0.song_id}] {0.title}, **queued by** {1}\n' \
+                      '**Hypes:** {0.hype_count} ({2})\n' \
+                      '**Skip votes:** {0.skip_votes}\n' \
+                      '**Listeners:** {3}\n' \
+                      '**Queue:** {4}'.format(self._song_context, queued_by, hypes_str, listeners_str, djs_str)
 
-                    # TODO: messages needs to be unpinned to be pinned (limit of 50 pinned messages)
-                    # await self._bot.pin_message(self._status_message)
+            queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
+            stream_title = '{}, queued by {}'.format(self._song_context.title, queued_by)
+
+            # check for the automatic skip
+            listener_skips = listeners & self._song_context.get_skip_set()
+            if len(listener_skips) >= self._config_skip_ratio * len(listeners):
+                await self._bot.send_message(self._bot.text_channel, 'Community voted to skip')
+                self._switch_state.set()
+
+        if self._status_message:
+            self._status_message = await self._bot.edit_message(self._status_message, message)
+            log.debug("Status message updated")
+        else:
+            self._status_message = await self._message(message)
+            await self._meta_callback(stream_title)
+            log.debug("New status message created")
 
     async def _get_song(self, dj, retries=3):
         for _ in range(retries):
@@ -485,6 +484,7 @@ class Player:
     #
     async def _player_fsm(self):
         await self._transition_lock.acquire()
+        nothing_to_play = False
         while True:
             #
             # Next state switch
@@ -498,15 +498,14 @@ class Player:
             if self.stopped:
                 # clear the queue and dj_cooldown to behave as intended next time
                 await self._users.clear_queue()
-                self._dj_cooldown.clear()
-                self._bot.loop.create_task(self._update_status())
+                self._apply_cooldown = True
             #
             # STREAM_MODE
             #
             elif self.streaming:
                 # clear the queue and dj_cooldown to behave as intended next time
                 await self._users.clear_queue()
-                self._dj_cooldown.clear()
+                self._apply_cooldown = True
                 # when the stream ends or is interrupted, next state should be 'stopped'
                 self._next_state = PlayerState.STOPPED
                 # get stream info
@@ -514,24 +513,20 @@ class Player:
                     continue
                 # let's play!
                 self._spawn_ffmpeg()
-                self._bot.loop.create_task(self._update_status())
-
             #
             # DJ_* MODES
             #
             elif self.waiting:
+                self._apply_cooldown = True
                 self._next_state = PlayerState.DJ_PLAYING
-                self._dj_cooldown.clear()
                 # there is not much to do except wait
 
             elif self.cooldown:
                 self._next_state = PlayerState.DJ_PLAYING
-                if not self._dj_cooldown.is_set():
-                    task = self._bot.loop.create_task(self._delayed_dj_task())
-                    await self._dj_cooldown.wait()
-                    task.cancel()
-                # transition to the next state is automatic
-                continue
+                # clear the flag indicating cooldown should be applied so next time it is skipped
+                self._apply_cooldown = False
+                # we will create a task that will trigger the transition
+                cooldown_task = self._bot.loop.create_task(self._delayed_dj_task())
 
             elif self.playing:
                 # if there are no listeners left, we should just wait for someone to join
@@ -552,7 +547,7 @@ class Player:
 
                 if dj is None:
                     # time for an automatic playlist, but check if the cooldown state should be inserted before
-                    if not self._dj_cooldown.is_set():
+                    if self._apply_cooldown:
                         self._next_state = PlayerState.DJ_COOLDOWN
                         continue
 
@@ -569,14 +564,22 @@ class Player:
                         # if we did not succeed with automatic playlist, we're... eh doomed?
                         # considering credit replenish every 24 h, we just need about 400 applicable
                         # songs slightly longer than 3.5 minutes
-                        self._dj_cooldown.clear()
+                        if not nothing_to_play:
+                            nothing_to_play = True
+                            await self._message('No suitable song found for automatic playlist. Join the DJ queue to '
+                                                'play!')
+                        self._apply_cooldown = True
                         self._next_state = PlayerState.DJ_COOLDOWN
                         continue
 
                 # at this point, _song_context should contain a valid SongContext object
-                # so let's play it!
+                # so let's clear a flag and play it!
+                nothing_to_play = False
                 self._spawn_ffmpeg()
-                self._bot.loop.create_task(self._update_status())
+
+            # update status message and ICY meta information
+            if not (self.cooldown and nothing_to_play):
+                await self._update_status()
 
             #
             # State event -- current state should be set up, we now have to wait
@@ -601,6 +604,12 @@ class Player:
                 await self._songs.update_stats(self._song_context)
                 self._song_context = None
 
+            # if we were in cooldown, cancel cooldown task if not finished
+            elif self.cooldown:
+                cooldown_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cooldown_task
+
             # kill ffmpeg if still running
             if self._ffmpeg is not None and self._ffmpeg.poll() is None:
                 self._ffmpeg.kill()
@@ -615,16 +624,18 @@ class Player:
     def _playback_ended_callback(self):
         self._bot.loop.call_soon_threadsafe(self._playback_ended)
 
-    def _playback_ended(self):
+    def _playback_ended(self):  # TODO: atomicity provided by GIL
         if self._transition_lock.locked():
             # assuming the FSM is doing a transition already
             return
-        # otherwise should be safe, stream will stop or new song played
-        self._switch_state.set()
+        if self.playing or self.streaming:
+            self._switch_state.set()
 
     async def _delayed_dj_task(self):
         await asyncio.sleep(15, loop=self._bot.loop)
-        self._dj_cooldown.set()
+        async with self._transition_lock:
+            if self.cooldown:
+                self._switch_state.set()
 
     def _whisper(self, user_id, message):
         user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
