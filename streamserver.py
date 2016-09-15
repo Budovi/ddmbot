@@ -179,9 +179,9 @@ class StreamServer:
     async def init(self, users, bot_voice):
         self._users = users
         ffmpeg_command = 'ffmpeg -loglevel error -y -f s16le -ar {} -ac {} -i {}' \
-                         ' -f adts -c:a libfdk_aac -b:a {}k {}' \
+                         ' -f adts -c:a {} -b:a {}k {}' \
             .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['int_pipe']),
-                    self._config_bitrate, shlex.quote(self._config['aac_pipe']))
+                    self._config['aac_encoder'], self._config_bitrate, shlex.quote(self._config['aac_pipe']))
         self._ffmpeg_args = shlex.split(ffmpeg_command)
 
         # http server initialization
