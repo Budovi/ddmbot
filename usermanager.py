@@ -105,7 +105,7 @@ class UserManager:
             self._listeners[discord_id] = {'active': current_time, 'direct': token is not None, 'notified_ds': False,
                                            'notified_dj': False}
 
-            self._player.users_changed()
+            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
     async def remove_listener(self, discord_id):
         async with self._lock:
@@ -117,7 +117,7 @@ class UserManager:
             except KeyError:
                 raise ValueError('User is not listening')
 
-            self._player.users_changed()
+            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
     async def join_queue(self, discord_id):
         async with self._lock:
@@ -127,9 +127,7 @@ class UserManager:
                 return
             self._queue.append(discord_id)
 
-            if len(self._queue) == 1:
-                self._bot.loop.create_task(self._player.cooldown_skip())
-            self._player.users_changed()
+            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
     async def leave_queue(self, discord_id):
         async with self._lock:
@@ -138,9 +136,7 @@ class UserManager:
             except ValueError:
                 raise ValueError('User is not in queue')
 
-            if not self._queue:
-                self._player.cooldown_reset()
-            self._player.users_changed()
+            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
     async def generate_urls(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
@@ -229,7 +225,5 @@ class UserManager:
                     self._listeners.pop(listener)
 
             # now update the player
-            if remove_djs and not self._queue:
-                self._player.cooldown_reset()
             if remove_listeners or remove_djs:
-                self._player.users_changed()
+                self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))

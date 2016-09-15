@@ -333,32 +333,34 @@ class Player:
     #
     # UserManager interface
     #
-    async def cooldown_skip(self):
+    async def users_changed(self, listeners_present, djs_present):
+        # we will need a transition lock in any case
         async with self._transition_lock:
-            if self.cooldown:
-                self._switch_state.set()
+            if self.stopped:
+                # nobody cares about users
+                return
+            if listeners_present:
+                if self.waiting:
+                    self._switch_state.set()
+                    return
+            else:  # if not listeners_present
+                if self.cooldown:
+                    self._apply_cooldown = True
+                    self._switch_state.set()
+                    return
 
-    def cooldown_reset(self):
-        self._apply_cooldown = True
+            if djs_present:
+                self._apply_cooldown = True
+                if self.cooldown:
+                    self._switch_state.set()
+                    return
 
-    def users_changed(self):
-        self._bot.loop.create_task(self._users_changed())
+            # we want to update status message if we are not transitioning
+            await self._update_status()
 
     #
     # Internally used methods and callbacks
     #
-    async def _users_changed(self):
-        async with self._transition_lock:
-            if self.waiting:
-                # we were probably waiting for the first listener, so try to leave this state
-                self._switch_state.set()
-                return
-            if self.stopped or self.cooldown:
-                # in those states there is nothing in the status message to update
-                return
-            # we are in a state where may be appropriate to update a status message
-            await self._update_status()
-
     async def _update_status(self):
         if not self._transition_lock.locked():
             raise RuntimeError('Update status may only be called with transition lock acquired')
