@@ -528,21 +528,25 @@ class CommandHandler:
     # Ignore list load and save
     #
     def ignorelist_load(self):
-        with open(self._config['ignorelist_file'], 'r') as file:
-            for line in file:
-                if line.lstrip().startswith(';'):
-                    continue
-                # leave the id in the string format for now for a quicker comparison
-                self._ignorelist.add(line.split()[0])
+        try:
+            with open(self._config['ignorelist_file'], 'r') as file:
+                for line in file:
+                    if line.lstrip().startswith(';'):
+                        continue
+                    # leave the id in the string format for now for a quicker comparison
+                    self._ignorelist.add(line.split()[0])
+        except FileNotFoundError:
+            log.warning('File containing ignore list not found, a new one will be written on bot shutdown')
 
     def ignorelist_save(self):
         with open(self._config['ignorelist_file'], 'w') as file:
             file.write(
                 '; DdmBot user ignore list file\n'
-                '; This file contains blacklisted users. You can modify this file offline, use commands to edit the '
-                'blacklist with the bot directly.\n; One user ID per line, lines starting with a semicolon are '
-                'ignored. Text following user IDs is ignored too. File is automatically\n; generated and overwritten '
-                'on bot shutdown. You have been warned.\n'
+                ';   This file contains blacklisted users. You can modify this file offline, use\n'
+                '; commands to edit the blacklist when the bot is running.\n'
+                ';   One user ID per line, lines starting with a semicolon are ignored. Text\n'
+                '; following user ID (separated by a space) is ignored too. File is automatically\n'
+                '; generated and overwritten on bot shutdown. You have been warned.\n'
             )
             for user_id in self._ignorelist:
                 member = discord.utils.get(self._bot.get_all_members(), id=user_id)
