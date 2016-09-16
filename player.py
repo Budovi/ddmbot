@@ -387,19 +387,23 @@ class Player:
         if self.stopped:
             message = '**Player is stopped**'
             stream_title = 'Awkward silence'
+            await self._bot.change_status()
 
         elif self.streaming:
             message = '**Playing stream:** {}\n' \
                       '**Listeners:** {}'.format(self._stream_name, listeners_str)
             stream_title = self._stream_name
+            await self._bot.change_status(discord.Game(name="a stream for {} listener(s)".format(len(listeners))))
 
         elif self.waiting:
             message = '**Waiting for the first listener**'
             stream_title = 'Hold on a second...'
+            await self._bot.change_status(discord.Game(name="a waiting game :("))
 
         elif self.cooldown:
             message = '**Waiting for DJs**, automatic playlist will be initiated in a few seconds'
-            stream_title = 'Almost there!'
+            stream_title = 'Waiting for DJs'
+            await self._bot.change_status(discord.Game(name="with a countdown clock"))
 
         elif self.playing:
             # assemble the rest of the information
@@ -416,6 +420,8 @@ class Player:
 
             queued_by = 'auto-playlist' if self._song_context.user_id is None else names[self._song_context.user_id]
             stream_title = '{}, queued by {}'.format(self._song_context.title, queued_by)
+            await self._bot.change_status(discord.Game(name="songs from DJ queue for {} listener(s)"
+                                                       .format(len(listeners))))
 
             # check for the automatic skip
             listener_skips = listeners & self._song_context.get_skip_set()
