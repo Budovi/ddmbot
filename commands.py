@@ -268,7 +268,7 @@ class CommandHandler:
                  'a song that was queued by you.'
 
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False, help=_hype_help)
+    @dec.command(pass_context=True, ignore_extra=False, aliases=['h'], help=_hype_help)
     async def hype(self, ctx):
         if not self._users.is_listening(int(ctx.message.author.id)):
             raise dec.UserInputError('You must be listening to vote')
