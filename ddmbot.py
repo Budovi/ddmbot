@@ -120,12 +120,10 @@ async def on_voice_state_update(before, after):
     channel = voice_client.channel
 
     # joining
-    if (before.voice.voice_channel != channel or before.voice.self_deaf) and \
-            (after.voice.voice_channel == channel and not after.voice.self_deaf):
+    if before.voice.voice_channel != channel and after.voice.voice_channel == channel:
         await users.add_listener(int(after.id))
     # leaving
-    elif (before.voice.voice_channel == channel and not before.voice.self_deaf) and \
-            (after.voice.voice_channel != channel or after.voice.self_deaf):
+    elif before.voice.voice_channel == channel and after.voice.voice_channel != channel:
         try:
             await users.remove_listener(int(after.id))
         except ValueError:
