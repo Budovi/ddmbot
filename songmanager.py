@@ -90,12 +90,13 @@ class UnavailableSongError(Exception):
 
 
 class SongContext:
-    __slots__ = ['_user', '_song', '_title', '_url', '_hypes', '_skips']
+    __slots__ = ['_user', '_song', '_title', '_duration', '_url', '_hypes', '_skips']
 
-    def __init__(self, user_id, song_id, title, url):
+    def __init__(self, user_id, song_id, title, duration, url):
         self._user = user_id
         self._song = song_id
         self._title = title
+        self._duration = duration
         self._url = url
 
         self._hypes = set()
@@ -112,6 +113,10 @@ class SongContext:
     @property
     def title(self):
         return self._title
+
+    @property
+    def duration(self):
+        return self._duration
 
     @property
     def url(self):
@@ -368,7 +373,7 @@ class SongManager:
             song.save()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
                                        song_title=song.title)
-        return SongContext(user_id, song.id, song.title, result['url'])
+        return SongContext(user_id, song.id, song.title, song.duration, result['url'])
 
     def _update_stats(self, song_ctx: SongContext):
         current_time = datetime.now()
@@ -427,7 +432,7 @@ class SongManager:
             song.save()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
                                        song_title=song.title)
-        return SongContext(None, song.id, song.title, result['url'])
+        return SongContext(None, song.id, song.title, song.duration, result['url'])
 
     def _list_playlist(self, user_id, offset, limit):
         result = list()
