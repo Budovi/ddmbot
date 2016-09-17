@@ -12,6 +12,29 @@ import discord.utils
 log = logging.getLogger('ddmbot.usermanager')
 
 
+class ListenerInfo:
+    __slots__ = ['_last_activity', '_is_direct', 'notified_dj', 'notified_ds']
+
+    def __init__(self, *, direct):
+        self._last_activity = datetime.datetime.now()
+        self._is_direct = direct
+        self.notified_dj = False
+        self.notified_ds = False
+
+    def refresh(self):
+        self._last_activity = datetime.datetime.now()
+        self.notified_dj = False
+        self.notified_ds = False
+
+    @property
+    def last_activity(self):
+        return self._last_activity
+
+    @property
+    def is_direct(self):
+        return self._is_direct
+
+
 class UserManager:
     def __init__(self, config, bot, aac_server):
         self._config_ds_token_timeout = datetime.timedelta(seconds=int(config['ds_token_timeout']))
@@ -26,7 +49,7 @@ class UserManager:
         self._lock = asyncio.Lock(loop=bot.loop)
 
         self._tokens = dict()  # maps token (string) -> (timestamp, user)
-        self._listeners = dict()  # maps discord_id (int) -> {'active': timestamp, 'direct': boolean, 'notified_dj'...}
+        self._listeners = dict()  # maps discord_id (int) -> ListenerInfo
         self._queue = collections.deque()
 
         self._player = None
@@ -66,8 +89,8 @@ class UserManager:
                 return None
             timestamp, user = self._tokens[token]
             # only one connection is possible at the time
-            # duplicate token will time out eventually
-            if user in self._listeners and not self._listeners[user]['direct']:
+            if user in self._listeners and not self._listeners[user].is_direct \
+                    and not hasattr(self._bot, 'direct_channel'):
                 log.debug('Token {} is valid for user {}, but the user is connected using discord'.format(token, user))
                 return None
             log.debug('Token {} verification passed, associated user: {}'.format(token, user))
@@ -94,28 +117,51 @@ class UserManager:
     #
     # API for user manipulation
     #
-    async def add_listener(self, discord_id, token=None):
-        current_time = datetime.datetime.now()
+    async def add_listener(self, discord_id, *, direct):
         async with self._lock:
-            if discord_id in self._listeners and token is None and self._listeners[discord_id]['direct']:
-                # someone using a direct stream switches over to the discord voice
-                log.debug('Switching user {} from direct to discord stream'.format(discord_id))
-                self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
+            if discord_id in self._listeners:
+                info = self._listeners[discord_id]
 
-            self._listeners[discord_id] = {'active': current_time, 'direct': token is not None, 'notified_ds': False,
-                                           'notified_dj': False}
+                if info.is_direct and not direct:
+                    # someone using a direct stream connected to the voice channel
+                    log.debug('Switching user {} from direct stream to discord channel'.format(discord_id))
+                    self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
+                elif not info.is_direct and direct:
+                    # some connected to a voice channel switched to the direct stream
+                    if not hasattr(self._bot, 'direct_channel'):
+                        log.error('User {} has connected to the direct stream while using voice channel, but this '
+                                  'should not be possible in the current setup'.format(discord_id))
+                        return
+                    log.debug('Switching user {} from discord channel to direct stream'.format(discord_id))
+                    member = discord.utils.get(self._bot.voice_channel.server.members, id=str(discord_id))
+                    if member is None:
+                        log.error('Cannot move user {} -- it\'s not a recognized server member'.format(discord_id))
+                    else:
+                        self._bot.loop.create_task(self._bot.move_member(member, self._bot.direct_channel))
+                elif not info.is_direct and not direct:
+                    # something fishy is going on...
+                    log.error('Tried to add user {} with the discord channel connection twice'.format(discord_id))
+                    return
+                # last combination is direct stream -> direct stream, there is nothing weird about that
+
+            # now add the user to the listeners, rewriting previous entry if present
+            self._listeners[discord_id] = ListenerInfo(direct=direct)
 
             self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
-    async def remove_listener(self, discord_id):
+    async def remove_listener(self, discord_id, *, direct):
         async with self._lock:
+            # ignore "incompatible" removes
+            if discord_id not in self._listeners:
+                raise ValueError('User is not listening')
+            if self._listeners[discord_id].is_direct != direct:
+                log.debug('Ignoring incompatible remove for user {} (probably moved)'.format(discord_id))
+                return
             # remove the user from the queue, if present
             with suppress(ValueError):
                 self._queue.remove(discord_id)
-            try:
-                self._listeners.pop(discord_id)
-            except KeyError:
-                raise ValueError('User is not listening')
+            # remove the user from the listeners
+            self._listeners.pop(discord_id)
 
             self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
 
@@ -152,14 +198,10 @@ class UserManager:
     # API for activity update
     #
     async def refresh_activity(self, discord_id):
-        current_time = datetime.datetime.now()
         async with self._lock:
             if discord_id in self._listeners:
                 log.debug('Refreshing activity for user {}'.format(discord_id))
-                attributes = self._listeners[discord_id]
-                attributes['active'] = current_time
-                attributes['notified_ds'] = False
-                attributes['notified_dj'] = False
+                self._listeners[discord_id].refresh()
 
     #
     # Internal timeout checking task
@@ -167,6 +209,7 @@ class UserManager:
     def _whisper(self, user_id, message):
         user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
         if user is None:
+            log.error('Cannot whisper user {} -- it\'s not a recognized server member'.format(user_id))
             return
         self._bot.loop.create_task(self._bot.send_message(user, message))
 
@@ -186,29 +229,29 @@ class UserManager:
                         remove_tokens.add(token)
                 # check all djs
                 for dj in self._queue:
-                    attributes = self._listeners[dj]
-                    time_diff = current_time - attributes['active']
+                    info = self._listeners[dj]
+                    time_diff = current_time - info.last_activity
                     if time_diff > self._config_dj_remove_time:
                         self._whisper(dj, 'You have been removed from the DJ queue due to inactivity')
                         remove_djs.add(dj)
-                    elif time_diff > self._config_dj_notify_time and not attributes['notified_dj']:
+                    elif time_diff > self._config_dj_notify_time and not info.notified_dj:
                         log.info('DJ {} notified for being inactive'.format(dj))
                         self._whisper(dj, 'You\'re about to be removed from the DJ queue due to inactivity.\n'
                                           'Please reply to this message to prevent that.')
-                        attributes['notified_dj'] = True
+                        info.notified_dj = True
                 # and all the direct listeners too
-                for listener, attributes in self._listeners.items():
-                    if not attributes['direct']:
+                for listener, info in self._listeners.items():
+                    if not info.is_direct:
                         continue
-                    time_diff = current_time - attributes['active']
+                    time_diff = current_time - info.last_activity
                     if time_diff > self._config_ds_remove_time:
                         self._whisper(listener, 'You have been disconnected from the stream due to inactivity')
                         remove_listeners.add(listener)
-                    elif time_diff > self._config_ds_notify_time and not attributes['notified_ds']:
+                    elif time_diff > self._config_ds_notify_time and not info.notified_ds:
                         log.info('Listener {} notified for being inactive'.format(listener))
                         self._whisper(listener, 'You\'re about to be disconnected from the stream due to inactivity.\n'
                                                 'Please reply to this message to prevent that.')
-                        attributes['notified_ds'] = True
+                        info.notified_ds = True
 
                 # now it is save to edit lists / dictionaries
                 for token in remove_tokens:

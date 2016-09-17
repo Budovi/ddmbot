@@ -73,6 +73,19 @@ async def on_ready():
                 log.warning('Bot is connected to multiple servers. Users who are not members of a server with the '
                             'text channel used will be ignored.')
 
+            # set up and check direct_channel
+            if 'direct_channel' in config['general'] and config['general']['direct_channel']:
+                ddmbot.direct_channel = discord.utils.get(ddmbot.get_all_channels(),
+                                                          id=config['general']['direct_channel'],
+                                                          type=discord.ChannelType.voice)
+                if ddmbot.direct_channel is None:
+                    raise RuntimeError('Specified direct channel could not be found')
+                if ddmbot.direct_channel.server != ddmbot.voice_channel.server:
+                    raise RuntimeError('Direct channel must be on the same server as the voice channel')
+                if not voice_permissions.move_members:
+                    raise RuntimeError('Bot does not have a permission to move members, either grant it this '
+                                       'permission or disable seamless stream switch feature')
+
             log.info('Initializing user manager')
             users.init(player)
             # populate user manager with existing listeners
@@ -80,10 +93,7 @@ async def on_ready():
                 if member == ddmbot.user:
                     continue
                 if not member.voice.self_deaf:
-                    await users.add_listener(int(member.id))
-
-            log.info('Initializing command handler')
-            command_handler.init()
+                    await users.add_listener(int(member.id), direct=False)
 
             log.info('Connecting to the voice channel')
             # obtain VoiceClient and initialize Player
@@ -94,6 +104,9 @@ async def on_ready():
 
             log.info('Initializing player')
             await player.init(voice_client, stream)
+
+            log.info('Initializing command handler')
+            command_handler.init()
 
             await ddmbot.send_message(ddmbot.text_channel, 'DdmBot ready')
             log.info('Initialization done')
@@ -121,11 +134,11 @@ async def on_voice_state_update(before, after):
 
     # joining
     if before.voice.voice_channel != channel and after.voice.voice_channel == channel:
-        await users.add_listener(int(after.id))
+        await users.add_listener(int(after.id), direct=False)
     # leaving
     elif before.voice.voice_channel == channel and after.voice.voice_channel != channel:
         try:
-            await users.remove_listener(int(after.id))
+            await users.remove_listener(int(after.id), direct=False)
         except ValueError:
             log.warning('Tried to remove non-existing listener in on_voice_update')
 

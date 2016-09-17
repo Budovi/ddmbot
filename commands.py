@@ -47,6 +47,10 @@ class CommandHandler:
         self.ignorelist_load()
         self._restart_scheduled = False
 
+        self._direct_stream_message = 'Playlist link: {}\nDirect link: `{}`\n\nPlease note that these links will ' \
+                                      'expire in a few minutes. Also, you can only be connected from a single ' \
+                                      'location, including a discord voice channel.'
+
         self._operator_role = None
 
     @property
@@ -65,6 +69,13 @@ class CommandHandler:
         self._operator_role = discord.utils.get(get_all_roles(), id=self._config['operator_role'])
         if self._operator_role is None:
             raise RuntimeError('Operator role specified was not found')
+
+        # finish up the direct stream message
+        if hasattr(self._bot, 'direct_channel'):
+            self._direct_stream_message += ' If you are connected already, your previous connection will be terminated.'
+        else:
+            self._direct_stream_message += ' If you are in the voice channel already, please disconnect before ' \
+                                           'proceeding.'
 
         self._bot.add_listener(self._command_error, 'on_command_error')
         self._bot.add_listener(self._command_completion, 'on_command_completion')
@@ -293,11 +304,7 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False, help=_direct_help)
     async def direct(self, ctx):
         playlist, direct = await self._users.generate_urls(int(ctx.message.author.id))
-        message = 'Playlist link: {}\nDirect link: `{}`\n\nPlease note that these links will expire in a few ' \
-                  'minutes. Also, you can only be connected from a single location, including a discord voice ' \
-                  'channel. If you are in the voice channel already, please disconnect before proceeding.'
-
-        await self._bot.whisper(message.format(playlist, direct))
+        await self._bot.whisper(self._direct_stream_message.format(playlist, direct))
 
     _forceskip_help = '*Operators only* Skips the song currently playing or terminates the stream\n\nPlease note ' \
                       'that the song *won\'t* be blacklisted automatically.'

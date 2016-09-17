@@ -312,7 +312,7 @@ class StreamServer:
 
         # notify the UserManager that a new listener was added
         # race condition is possible, but only one of the connections will be served
-        await self._users.add_listener(user, token)
+        await self._users.add_listener(user, direct=True)
 
         # wait before terminating
         log.debug('Waiting for the client termination')
@@ -400,7 +400,7 @@ class StreamServer:
                 for user in disconnected:
                     self._connections.pop(user)
                     try:
-                        await self._users.remove_listener(user)
+                        await self._users.remove_listener(user, direct=True)
                     except ValueError:
                         log.warning('Connection broke with {}, but the user was not listening'.format(user))
 
