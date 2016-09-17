@@ -60,7 +60,7 @@ class AacProcessor(threading.Thread):
                 # so we apparently got some data, clear the flag and calculate things
                 input_not_ready = False
                 data_len = len(data)
-                if data_len != self._frame_len:
+                if data_len != 0 and data_len != self._frame_len:
                     log.warning('AacProcessor: Got partial buffer of size {}'.format(data_len))
 
                 # call the callback
