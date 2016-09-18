@@ -412,7 +412,7 @@ class Player:
             queued_by = 'auto-playlist' if self._song_context.user_id is None else \
                 '<@{}>'.format(self._song_context.user_id)
 
-            message = '**Playing:** [{0.song_id}] {0.title}, **length** {1}:{2}, **queued by** {3}\n' \
+            message = '**Playing:** [{0.song_id}] {0.title}, **length** {1}:{2:02d}, **queued by** {3}\n' \
                       '**Hypes:** {0.hype_count} ({4})\n**Skip votes:** {0.skip_votes}\n' \
                       '**Listeners:** {5}\n**Queue:** {6}' \
                 .format(self._song_context, self._song_context.duration // 60, self._song_context.duration % 60,
