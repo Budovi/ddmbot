@@ -120,7 +120,7 @@ class PcmProcessor(threading.Thread):
                         else:
                             # if we read something, we are likely at the end of the input, pad with zeroes and log
                             # TODO: is there a way to distinguish buffering issues and end of the input issues?
-                            log.info('PcmProcessor: Data were padded with zeroes')
+                            log.debug('PcmProcessor: Data were padded with zeroes')
                             data.ljust(self._frame_len, b'\0')
 
                 except OSError as e:
