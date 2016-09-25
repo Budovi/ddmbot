@@ -209,7 +209,6 @@ class CommandHandler:
     @privileged(True)
     @dec.command(ignore_extra=False, help=_djmode_help)
     async def djmode(self):
-        await self._message('Player switched to DJ mode')
         await self._player.set_djmode()
 
     _stream_help = '*Operators only* Changes the player\'s state to STREAMING\n\nStream specified by the URL is ' \
@@ -236,7 +235,7 @@ class CommandHandler:
     #
     # User controls
     #
-    _join_help = 'Adds the user to the DJ queue\n\nYou must be listening to do this. When you stop listening, you ' \
+    _join_help = 'Adds you to the DJ queue\n\nYou must be listening to do this. When you stop listening, you ' \
                  'will be removed from the queue automatically.'
 
     @privileged(False)
@@ -249,7 +248,7 @@ class CommandHandler:
         except ValueError:
             await self._bot.whisper('You have to be listening to join the DJ queue')
 
-    _leave_help = 'Removes the user from the DJ queue'
+    _leave_help = 'Removes you from the DJ queue'
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_leave_help)
@@ -383,8 +382,8 @@ class CommandHandler:
             raise dec.UserInputError('You must specify at least one keyword to search')
 
         song_id, song_title = await self._songs.push_to_playlist(int(ctx.message.author.id), keywords)
-        await self._bot.whisper('**Song** [{}] {} **was added to your playlist. If this is not correct, you can remove'
-                                ' it by using the *pop* command.**'.format(song_id, song_title))
+        await self._bot.whisper('**Song** [{}] {} **was added to your playlist.** If this is not correct, you can '
+                                'remove it by using the *pop* command.'.format(song_id, song_title))
 
     _clear_help = 'Clears your playlist\n\nAll songs will be removed from your playlist.'
 
@@ -392,7 +391,7 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False, help=_clear_help)
     async def clear(self, ctx):
         await self._songs.clear_playlist(int(ctx.message.author.id))
-        await self._bot.whisper('Your playlist was cleared')
+        await self._bot.whisper('**Your playlist was cleared**')
 
     _shuffle_help = 'Shuffles your playlist\n\nShuffles all the songs in your playlist in a random manner.'
 
@@ -400,7 +399,7 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False, help=_shuffle_help)
     async def shuffle(self, ctx):
         await self._songs.shuffle_playlist(int(ctx.message.author.id))
-        await self._bot.whisper('Your playlist was shuffled')
+        await self._bot.whisper('**Your playlist was shuffled**')
 
     _list_help = 'Lists the songs in your playlist\n\nDue to message length restrictions, up to 20 songs are ' \
                  'returned for a single request. By default, the songs at the beginning of your playlist are ' \
@@ -456,8 +455,8 @@ class CommandHandler:
     _deduplicate_help = '*Operators only* Marks a song to be a duplicate of another song\n\nThis is a destructive ' \
                         'operation. The duplicate is replaced by it\'s "original" just before playing. Tests for ' \
                         'the blacklist, length and overplay protection are performed on the "original" song.\n' \
-                        'Song IDs can be located before the song name in the square brackets. You can use the ' \
-                        ' *search* command to find out the IDs.'
+                        'Song IDs can be located before the song name in the square brackets. You can also use the ' \
+                        ' *search* command to obtain the ID.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_deduplicate_help)
