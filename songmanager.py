@@ -70,6 +70,7 @@ class DBUser(DBSchema):
     play_count = peewee.IntegerField(default=0)
 
     playlist_head = peewee.ForeignKeyField(DBSongLink, null=True, default=None)
+    rotate_playlist = peewee.BooleanField(default=False)
 
 
 DeferredDBUser.set_model(DBUser)
@@ -197,6 +198,17 @@ class SongManager:
 
     async def get_autoplaylist_song(self):
         func = functools.partial(self._get_autoplaylist_song)
+        return await self._loop.run_in_executor(None, func)
+
+    #
+    # User operations
+    #
+    async def get_rotate_status(self, user_id):
+        func = functools.partial(self._get_rotate_status, user_id)
+        return await self._loop.run_in_executor(None, func)
+
+    async def set_rotate_status(self, user_id, rotate):
+        func = functools.partial(self._set_rotate_status, user_id, rotate)
         return await self._loop.run_in_executor(None, func)
 
     #
@@ -346,14 +358,24 @@ class SongManager:
                 raise LookupError('User\'s playlist is empty')
 
             # join song link and song tables to obtain a result
-            link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(
-                DBSongLink.id == user.playlist_head_id).get()
+            link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == user.playlist_head_id) \
+                .get()
             song = link.song
-            # update next song "pointer"
-            user.playlist_head_id = link.next_id
-            user.save()
-            link.delete_instance()
-            # check duplicate song flag
+
+            # now check if the link should be re-appended or deleted, update the pointers
+            if not user.rotate_playlist:
+                # update next song "pointer", should work in any situation
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                # delete the link
+                link.delete_instance()
+            elif link.next_id is not None:  # we should rotate and playlist does consist of multiple songs
+                # update next song "pointer"
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                # append the link at the end
+                DBSongLink.update(next=link.id).where(DBSongLink.next >> None).execute()
+                DBSongLink.update(next=None).where(DBSongLink.id == link.id).execute()
+
+            # check duplicate song flag and do the replacement if necessary
             if song.duplicate_id is not None:
                 song = song.duplicate
 
@@ -447,6 +469,14 @@ class SongManager:
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
                                        song_title=song.title)
         return SongContext(None, song.id, song.title, song.duration, result['url'])
+
+    def _get_rotate_status(self, user_id):
+        user = self._get_user(user_id)
+        return user.rotate_playlist
+
+    def _set_rotate_status(self, user_id, rotate):
+        self._get_user(user_id)  # to make sure the user exists in a first place
+        DBUser.update(rotate_playlist=rotate).where(DBUser.discord_id == user_id).execute()
 
     def _list_playlist(self, user_id, offset, limit):
         result = list()

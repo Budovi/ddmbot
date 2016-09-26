@@ -258,6 +258,27 @@ class CommandHandler:
         except ValueError:
             await self._bot.whisper('You are not in the DJ queue')
 
+    _rotate_help = 'Specify if your playlist should be rotated\n\nWithout an argument, returns your current setting. ' \
+                   'You can turn this feature on or off by passing \'on\' or \'off\' as an argument. When turned on, ' \
+                   'songs that have been played are put at the end of your playlist. They are removed otherwise.'
+
+    @privileged(False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_rotate_help)
+    async def rotate(self, ctx, setting: str=None):
+        if setting is None:
+            if await self._songs.get_rotate_status(int(ctx.message.author.id)):
+                await self._bot.whisper('Songs from your playlist are *rotated* after playing')
+            else:
+                await self._bot.whisper('Songs from your playlist are *removed* after playing')
+        elif setting == 'on':
+            await self._songs.set_rotate_status(int(ctx.message.author.id), True)
+            await self._bot.whisper('**Your playlist was set to _rotate_ songs that have been played**')
+        elif setting == 'off':
+            await self._songs.set_rotate_status(int(ctx.message.author.id), False)
+            await self._bot.whisper('**Your playlist was set to _remove_ songs that have been played**')
+        else:
+            await self._bot.whisper('Valid options for a rotate command are \'on\' and \'off\'')
+
     _kick_help = '*Operators only* Kicks the specified user from the DJ queue\n\nThe user may be specified by it\'s ' \
                  'username, nick or mention.'
 
