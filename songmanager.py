@@ -43,8 +43,9 @@ class DBSong(DBSchema):
     duration = peewee.IntegerField()
     credit_count = peewee.IntegerField()
     is_blacklisted = peewee.BooleanField(default=False)
+    has_failed = peewee.BooleanField(default=False)
 
-    duplicate = peewee.ForeignKeyField('self', null=True)  # TODO handle on_delete?
+    duplicate = peewee.ForeignKeyField('self', null=True)
 
 
 # we will need this to resolve a dependency loop
@@ -260,6 +261,13 @@ class SongManager:
         func = functools.partial(self._rename_song, song_id, new_title)
         return await self._loop.run_in_executor(None, func)
 
+    async def list_failed_songs(self):
+        return await self._loop.run_in_executor(None, self._list_failed_songs)
+
+    async def clear_failed_flag(self, song_id):
+        func = functools.partial(self._clear_failed_flag, song_id)
+        return await self._loop.run_in_executor(None, func)
+
     #
     # Internally used methods and attributes
     #
@@ -352,7 +360,7 @@ class SongManager:
         # check the constrains
         # -- blacklist
         if song.is_blacklisted:
-            raise RuntimeError('Song [{}] is unavailable or blacklisted by an operator'.format(song.id))
+            raise RuntimeError('Song [{}] was blacklisted by an operator'.format(song.id))
         # -- last played
         time_diff = datetime.now() - song.last_played
         if time_diff.total_seconds() < self._config_op_interval:
@@ -368,11 +376,17 @@ class SongManager:
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
         except youtube_dl.DownloadError:  # blacklist the song and raise an exception
-            log.warning('Download of the song [{}] failed, blacklisting'.format(song.id), exc_info=True)
-            song.is_blacklisted = True
-            song.save()
+            if not song.has_failed:
+                log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
+                DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
                                        song_title=song.title)
+
+        # there is a chance song was marked as failed before but it no longer applies, fix the flag
+        if song.has_failed:
+            log.info('Failed flag was removed from the song [{}] after a successful download'.format(song.id))
+            DBSong.update(has_failed=False).where(DBSong.id == song.id).execute()
+
         return SongContext(user_id, song.id, song.title, song.duration, result['url'])
 
     def _update_stats(self, song_ctx: SongContext):
@@ -415,6 +429,7 @@ class SongManager:
             DBSong.duration <= self._config_max_duration,  # song duration
             DBSong.credit_count > 0,  # overplay protection
             ~DBSong.is_blacklisted,  # cannot be blacklisted
+            ~DBSong.has_failed,  # probably unavailable
             DBSong.duplicate >> None  # not fair + outdated information
         ).order_by(peewee.fn.Random())
 
@@ -426,10 +441,9 @@ class SongManager:
 
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError as e:  # blacklist the song and raise an exception
-            log.warning('Download of the song [{}] failed, blacklisting'.format(song.id), exc_info=True)
-            song.is_blacklisted = True
-            song.save()
+        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+            log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
+            DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
                                        song_title=song.title)
         return SongContext(None, song.id, song.title, song.duration, result['url'])
@@ -651,7 +665,8 @@ class SongManager:
                       'skip_votes': song.skip_votes, 'total_skip_votes': song.skip_votes,
                       'play_count': song.play_count, 'total_play_count': song.play_count,
                       'duration': song.duration, 'credits_remaining': song.credit_count,
-                      'blacklisted': song.is_blacklisted, 'duplicates': None, 'duplicated_by': list()}
+                      'blacklisted': song.is_blacklisted, 'failed': song.has_failed,
+                      'duplicates': None, 'duplicated_by': list()}
             if song.duplicate_id is not None:
                 song2 = song.duplicate
                 result['duplicates'] = (song2.id, song2.title)
@@ -695,6 +710,22 @@ class SongManager:
     def _rename_song(self, song_id, new_title):  # intentionally kept as an instance method
         if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+
+    def _list_failed_songs(self):  # intentionally kept as an instance method
+        result = list()
+        for song in DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None).limit(20):
+            result.append((song.id, song.title))
+        return result
+
+    def _clear_failed_flag(self, song_id):  # intentionally kept as an instance method
+        query = DBSong.update(has_failed=False)
+        if song_id is not None:
+            # apply only to a song specified
+            if query.where(DBSong.id == song_id).execute() != 1:
+                raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+        else:
+            # clear the flag for all the songs
+            query.where(DBSong.duplicate >> None).execute()
 
     async def _credit_renew(self):
         # check if the last timestamp is present in the database

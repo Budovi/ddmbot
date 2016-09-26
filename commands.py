@@ -525,10 +525,47 @@ class CommandHandler:
                 '    **Skip votes:** {total_skip_votes} ({skip_votes})\n' \
                 '    **Duration:** {duration}s\n' \
                 '    **Credits remaining:** {credits_remaining}\n\n' \
-                '    **Blacklisted:** {blacklisted}\n\n' \
+                '    **Blacklisted:** {blacklisted}\n' \
+                '    **Has failed to download:** {failed}\n\n' \
                 '    **Marked as a duplicate of:** {duplicates}\n' \
                 '    **Is duplicated by:** {duplicated_by}'.format_map(info)
         await self._bot.whisper(reply)
+
+    _list_failed_help = 'Returns a list of the songs that have failed to download\n\nFirst 20 results are returned. ' \
+                        'Songs that are marked as a duplicate (thus resolved) are not included in the results.\n\n' \
+                        'Songs that have failed to download are excluded form the automatic playlist. Operators ' \
+                        'should investigate download issues and provide an alternative source if necessary.\nSongs ' \
+                        'are removed from this list automatically after a successful download, or by using the ' \
+                        '*clear_failed* command.'
+
+    @privileged(False)
+    @dec.command(ignore_extra=False, help=_list_failed_help)
+    async def list_failed(self):
+        items = await self._songs.list_failed_songs()
+        if not items:
+            await self._bot.whisper('There are no songs flagged because of a download failure')
+            return
+        reply = '**First 20 songs flagged because of a download failure:**\n **>** ' + \
+                '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
+        await self._bot.whisper(reply)
+
+    _clear_failed_help = '*Operators only* Clears flags indicating that song has failed to download\n\nSongs marked ' \
+                         'as a duplicate are not affected.\nBy doing this, the songs won\'t be excluded from the ' \
+                         'automatic playlist anymore. You can use this command to fix the database after a service ' \
+                         'outage. Optionally, you can specify a song ID to remove individual songs from the list.'
+
+    @privileged(True)
+    @dec.command(ignore_extra=False, help=_clear_failed_help)
+    async def clear_failed(self, song_id: int=None):
+        try:
+            await self._songs.clear_failed_flag(song_id)
+        except ValueError as e:
+            raise dec.UserInputError(str(e))
+        if song_id is not None:
+            await self._message('Flag indicating a download failure has been cleared for the song [{}]'
+                                .format(song_id))
+        else:
+            await self._message('Flags indicating download failures have been cleared')
 
     #
     # Ignore list load and save

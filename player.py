@@ -449,7 +449,7 @@ class Player:
                 await self._message('Song skipped: {}'.format(str(e)))
                 continue
             except UnavailableSongError as e:
-                await self._log('Song [{}] *{}* was automatically blacklisted due to a download error'
+                await self._log('Song [{}] *{}* was flagged due to a download error'
                                 .format(e.song_id, e.song_title))
                 await self._message('Song skipped: {}'.format(str(e)))
                 continue
@@ -572,7 +572,7 @@ class Player:
                         self._song_context = await self._songs.get_autoplaylist_song()
                     except UnavailableSongError as e:
                         # we need to log this to the logging channel
-                        await self._log('Song [{}] *{}* was automatically blacklisted due to a download error'
+                        await self._log('Song [{}] *{}* was flagged due to a download error'
                                         .format(e.song_id, e.song_title))
                         continue
 
