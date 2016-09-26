@@ -150,6 +150,15 @@ class SongContext:
         return self._skips
 
 
+# decorator for SongManager interface methods
+def in_executor(method):
+    def wrapped_method(self, *args, **kwargs):
+        func = functools.partial(method, self, *args, **kwargs)
+        return self._loop.run_in_executor(None, func)
+
+    return wrapped_method
+
+
 class SongManager:
     def __init__(self, config, loop):
         self._config_ap_threshold = int(config['ap_hype_threshold'])
@@ -188,97 +197,400 @@ class SongManager:
     #
     # Interface to be used by a player
     #
-    async def get_next_song(self, user_id):
-        func = functools.partial(self._get_next_song, user_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def get_next_song(self, user_id):
+        song = None
+        with self._database.atomic():
+            # check if there is an associated playlist
+            user = self._get_user(user_id)
+            if user.playlist_head_id is None:
+                raise LookupError('User\'s playlist is empty')
 
-    async def update_stats(self, song_ctx):
-        func = functools.partial(self._update_stats, song_ctx)
-        return await self._loop.run_in_executor(None, func)
+            # join song link and song tables to obtain a result
+            link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == user.playlist_head_id) \
+                .get()
+            song = link.song
 
-    async def get_autoplaylist_song(self):
-        func = functools.partial(self._get_autoplaylist_song)
-        return await self._loop.run_in_executor(None, func)
+            # now check if the link should be re-appended or deleted, update the pointers
+            if not user.rotate_playlist:
+                # update next song "pointer", should work in any situation
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                # delete the link
+                link.delete_instance()
+            elif link.next_id is not None:  # we should rotate and playlist does consist of multiple songs
+                # update next song "pointer"
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                # append the link at the end
+                DBSongLink.update(next=link.id).where(DBSongLink.next >> None).execute()
+                DBSongLink.update(next=None).where(DBSongLink.id == link.id).execute()
+
+            # check duplicate song flag and do the replacement if necessary
+            if song.duplicate_id is not None:
+                song = song.duplicate
+
+        # check the constrains
+        # -- blacklist
+        if song.is_blacklisted:
+            raise RuntimeError('Song [{}] was blacklisted by an operator'.format(song.id))
+        # -- last played
+        time_diff = datetime.now() - song.last_played
+        if time_diff.total_seconds() < self._config_op_interval:
+            raise RuntimeError('Song [{}] has been played recently'.format(song.id))
+        # -- credits remaining
+        if song.credit_count == 0:
+            raise RuntimeError('Song [{}] is overplayed'.format(song.id))
+        # -- check the song length
+        if song.duration > self._config_max_duration:
+            raise RuntimeError('Song [{}]\'s length exceeds the limit'.format(song.id))
+
+        # fetch the URL using youtube_dl
+        try:
+            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+            if not song.has_failed:
+                log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
+                DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
+            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
+                                       song_title=song.title)
+
+        # there is a chance song was marked as failed before but it no longer applies, fix the flag
+        if song.has_failed:
+            log.info('Failed flag was removed from the song [{}] after a successful download'.format(song.id))
+            DBSong.update(has_failed=False).where(DBSong.id == song.id).execute()
+
+        return SongContext(user_id, song.id, song.title, song.duration, result['url'])
+
+    @in_executor
+    def update_stats(self, song_ctx: SongContext):
+        current_time = datetime.now()
+        # update a song in the database -- hype, skip count, credit count, last played
+        song_query = DBSong.update(hype_count=DBSong.hype_count + song_ctx.hype_count,
+                                   skip_votes=DBSong.skip_votes + song_ctx.skip_votes,
+                                   play_count=DBSong.play_count + 1,
+                                   last_played=current_time, credit_count=DBSong.credit_count - 1) \
+            .where(DBSong.id == song_ctx.song_id)
+        # update a user in the database -- hype, skip count song received
+        user_query = DBUser.update(hype_count_got=DBUser.hype_count_got + song_ctx.hype_count,
+                                   skip_votes_got=DBUser.skip_votes_got + song_ctx.skip_votes,
+                                   play_count=DBUser.play_count + 1) \
+            .where(DBUser.discord_id == song_ctx.user_id)
+
+        # prepare all the other users which may not exist in the database
+        user_dict_list = [{'discord_id': user_id} for user_id in (song_ctx.get_hype_set() | song_ctx.get_skip_set())]
+        if user_dict_list:
+            DBUser.insert_many(user_dict_list).on_conflict('ignore').execute()
+        # now do the votes query which will update _given stats
+        hypes_query = DBUser.update(hype_count_given=DBUser.hype_count_given + 1)\
+            .where(DBUser.discord_id << song_ctx.get_hype_set())
+        skips_query = DBUser.update(skip_votes_given=DBUser.skip_votes_given + 1)\
+            .where(DBUser.discord_id << song_ctx.get_skip_set())
+
+        with self._database.atomic():
+            song_query.execute()
+            user_query.execute()
+            hypes_query.execute()
+            skips_query.execute()
+
+    @in_executor
+    def get_autoplaylist_song(self):
+        reference_time = datetime.now() - \
+                         timedelta(seconds=self._config_op_interval)
+        query = DBSong.select(DBSong).where(
+            DBSong.last_played < reference_time,  # overplay protection interval
+            DBSong.hype_count >= self._config_ap_threshold,  # hype threshold
+            DBSong.skip_votes * self._config_ap_ratio <= DBSong.hype_count,  # hype to skip ratio
+            DBSong.duration <= self._config_max_duration,  # song duration
+            DBSong.credit_count > 0,  # overplay protection
+            ~DBSong.is_blacklisted,  # cannot be blacklisted
+            ~DBSong.has_failed,  # probably unavailable
+            DBSong.duplicate >> None  # not fair + outdated information
+        ).order_by(peewee.fn.Random())
+
+        try:
+            song = query.get()
+        except DBSong.DoesNotExist:
+            # there is no song conforming to the autoplaylist conditions
+            return None
+
+        try:
+            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
+        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+            log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
+            DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
+            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
+                                       song_title=song.title)
+        return SongContext(None, song.id, song.title, song.duration, result['url'])
 
     #
     # User operations
     #
-    async def get_rotate_status(self, user_id):
-        func = functools.partial(self._get_rotate_status, user_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def get_rotate_status(self, user_id):
+        user = self._get_user(user_id)
+        return user.rotate_playlist
 
-    async def set_rotate_status(self, user_id, rotate):
-        func = functools.partial(self._set_rotate_status, user_id, rotate)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def set_rotate_status(self, user_id, rotate):
+        self._get_user(user_id)  # to make sure the user exists in a first place
+        DBUser.update(rotate_playlist=rotate).where(DBUser.discord_id == user_id).execute()
 
     #
     # Playlist operations
     #
-    async def list_playlist(self, user_id, offset, limit):
-        func = functools.partial(self._list_playlist, user_id, offset, limit)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def list_playlist(self, user_id, offset, limit):
+        result = list()
+        with self._database.atomic():
+            user = self._get_user(user_id)
+            current_link_id = user.playlist_head_id
+            for index in range(limit + offset):
+                if current_link_id is None:
+                    break
+                link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == current_link_id).get()
+                if index >= offset:
+                    result.append((link.song.id, link.song.title))
+                current_link_id = link.next_id
+        return result
 
-    async def append_to_playlist(self, user_id, uris):
-        func = functools.partial(self._append_to_playlist, user_id, uris)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def append_to_playlist(self, user_id, uris):
+        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
+        if count >= self._config_max_songs:
+            raise RuntimeError('Your playlist is full')
+        # assembly the list of songs for insertion
+        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
+        # now create the links in the database
+        with self._database.atomic():
+            user = self._get_user(user_id)
 
-    async def prepend_to_playlist(self, user_id, uris):
-        func = functools.partial(self._prepend_to_playlist, user_id, uris)
-        return await self._loop.run_in_executor(None, func)
+            # atomically re-check the condition
+            to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
+            if to_insert <= 0:
+                raise RuntimeError('Your playlist is full')
 
-    async def pop_from_playlist(self, user_id, count):
-        func = functools.partial(self._pop_from_playlist, user_id, count)
-        return await self._loop.run_in_executor(None, func)
+            connection_point = None
+            if user.playlist_head_id is not None:
+                connection_point = DBSongLink.get(DBSongLink.user == user_id, DBSongLink.next >> None)
 
-    async def push_to_playlist(self, user_id, keywords):
-        func = functools.partial(self._push_to_playlist, user_id, keywords)
-        return await self._loop.run_in_executor(None, func)
+            previous_link = None
+            for song in song_list[to_insert - 1::-1]:
+                previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
+            # connect the chain created
+            if connection_point is not None:
+                connection_point.next_id = previous_link
+                connection_point.save()
+            else:
+                user.playlist_head_id = previous_link
+                user.save()
 
-    async def shuffle_playlist(self, user_id):
-        func = functools.partial(self._shuffle_playlist, user_id)
-        return await self._loop.run_in_executor(None, func)
+        truncated |= len(song_list) > to_insert
+        inserted = min(len(song_list), to_insert)
 
-    async def clear_playlist(self, user_id):
-        func = functools.partial(self._clear_playlist, user_id)
-        return await self._loop.run_in_executor(None, func)
+        return inserted, truncated, error_list
+
+    @in_executor
+    def prepend_to_playlist(self, user_id, uris):
+        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
+        if count >= self._config_max_songs:
+            raise RuntimeError('Your playlist is full')
+        # assembly the list of songs for insertion
+        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
+        # now create the links in the database
+        with self._database.atomic():
+            user = self._get_user(user_id)
+
+            # atomically re-check the condition
+            to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
+            if to_insert <= 0:
+                raise RuntimeError('Your playlist is full')
+
+            previous_link = user.playlist_head_id
+            for song in song_list[to_insert - 1::-1]:
+                previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
+            # connect the chain created
+            user.playlist_head_id = previous_link
+            user.save()
+
+        truncated |= len(song_list) > to_insert
+        inserted = min(len(song_list), to_insert)
+
+        return inserted, truncated, error_list
+
+    @in_executor
+    def pop_from_playlist(self, user_id, count):
+        if count <= 0:
+            return 0
+
+        with self._database.atomic():
+            user = self._get_user(user_id)
+
+            deleted = 0
+            current_link = user.playlist_head
+            while deleted < count and current_link is not None:
+                next_link = current_link.next
+                current_link.delete_instance()
+                current_link = next_link
+                deleted += 1
+
+            user.playlist_head = current_link
+            user.save()
+
+        return deleted
+
+    @in_executor
+    def push_to_playlist(self, user_id, keywords):
+        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
+        if count >= self._config_max_songs:
+            raise RuntimeError('Your playlist is full')
+
+        search_url = 'ytsearch:{}'.format(' '.join(keywords))
+        try:
+            result = self._ytdl.extract_info(search_url, download=False)
+            song_url = self._url_base['yt'].format(result['entries'][0]['id'])
+        except Exception:
+            raise RuntimeError('Search returned no results')
+
+        song = self._get_song(song_url)
+        # now we need to prepend it
+        with self._database.atomic():
+            # atomically re-check the condition for the length
+            if DBSongLink.select().where(DBSongLink.user == user_id).count() >= self._config_max_songs:
+                raise RuntimeError('Your playlist is full')
+
+            # now do the insertion
+            user = self._get_user(user_id)
+            link = DBSongLink.create(user=user_id, song=song.id, next=user.playlist_head_id)
+            user.playlist_head = link
+            user.save()
+
+        # return the id and title
+        return song.id, song.title
+
+    @in_executor
+    def shuffle_playlist(self, user_id):
+        query = DBSongLink.select().where(DBSongLink.user == user_id)
+        song_list = list()
+
+        # TODO: find a better way
+        # this approach is awfully inefficient, in most databases you can random shuffle column using a single query
+        # idea: join the table with randomly ordered selection on equal row numbers; update with the joined value
+        # problem: approach is totally non-portable
+        with self._database.atomic():
+            for item in query:
+                song_list.append(item.song_id)
+            random.shuffle(song_list)
+            for item, new_id in zip(query, song_list):
+                item.song_id = new_id
+                item.save()
+
+    @in_executor
+    def clear_playlist(self, user_id):
+        update_query = DBUser.update(playlist_head=None).where(DBUser.discord_id == user_id)
+        delete_query = DBSongLink.delete().where(DBSongLink.user == user_id)
+        with self._database.atomic():
+            update_query.execute()
+            delete_query.execute()
 
     #
     # Song management
     #
-    async def add_to_blacklist(self, song_id):
-        func = functools.partial(self._add_to_blacklist, song_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def add_to_blacklist(self, song_id):  # intentionally kept as an instance method
+        if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id).execute() != 1:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
-    async def remove_from_blacklist(self, song_id):
-        func = functools.partial(self._remove_from_blacklist, song_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def remove_from_blacklist(self, song_id):  # intentionally kept as an instance method
+        if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id).execute() != 1:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
-    async def search_songs(self, keywords):
-        func = functools.partial(self._search_songs, keywords)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def search_songs(self, keywords):  # intentionally kept as an instance method
+        query = DBSong.select(DBSong.id, DBSong.title)
+        for keyword in keywords:
+            keyword = '%{}%'.format(keyword)
+            query = query.where((DBSong.title ** keyword) | (DBSong.uuri ** keyword))
+        query = query.limit(20)
 
-    async def get_song_info(self, song_id):
-        func = functools.partial(self._get_song_info, song_id)
-        return await self._loop.run_in_executor(None, func)
+        result = list()
+        for row in query:
+            result.append((row.id, row.title))
+        return result
 
-    async def merge_songs(self, source_id, target_id):
-        func = functools.partial(self._merge_songs, source_id, target_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def get_song_info(self, song_id):  # intentionally kept as an instance method
+        try:
+            song = DBSong.get(id=song_id)
+            result = {'id': song.id, 'title': song.title, 'last_played': song.last_played, 'uuri': song.uuri,
+                      'hype_count': song.hype_count, 'total_hype_count': song.hype_count,
+                      'skip_votes': song.skip_votes, 'total_skip_votes': song.skip_votes,
+                      'play_count': song.play_count, 'total_play_count': song.play_count,
+                      'duration': song.duration, 'credits_remaining': song.credit_count,
+                      'blacklisted': song.is_blacklisted, 'failed': song.has_failed,
+                      'duplicates': None, 'duplicated_by': list()}
+            if song.duplicate_id is not None:
+                song2 = song.duplicate
+                result['duplicates'] = (song2.id, song2.title)
+                result['total_hype_count'] += song2.hype_count
+                result['total_skip_votes'] += song2.skip_votes
+                result['total_play_count'] += song2.play_count
+            duplicate_query = DBSong.select().where(DBSong.duplicate == song.id)
+            for song2 in duplicate_query:
+                result['duplicated_by'].append((song2.id, song2.title))
+                result['total_hype_count'] += song2.hype_count
+                result['total_skip_votes'] += song2.skip_votes
+                result['total_play_count'] += song2.play_count
 
-    async def split_song(self, song_id):
-        func = functools.partial(self._merge_songs, song_id, song_id)
-        return await self._loop.run_in_executor(None, func)
+            return result
+        except DBSong.DoesNotExist:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
-    async def rename_song(self, song_id, new_title):
-        func = functools.partial(self._rename_song, song_id, new_title)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def merge_songs(self, source_id, target_id):
+        if source_id == target_id:
+            # this is effectively a "split" call
+            if DBSong.update(duplicate=None).where(DBSong.id == source_id).execute() != 1:
+                raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
+        else:
+            with self._database.atomic():
+                try:
+                    target_song = DBSong.get(DBSong.id == target_id)
+                except DBSong.DoesNotExist:
+                    raise ValueError('Song [{}] cannot be found in the database'.format(target_id))
 
-    async def list_failed_songs(self):
-        return await self._loop.run_in_executor(None, self._list_failed_songs)
+                if target_song.duplicate_id == source_id:
+                    # we're "reassigning" the duplicate flags
+                    target_song.duplicate_id = None
+                    target_song.save()
+                elif target_song.duplicate_id is not None:
+                    # if a target is duplicate, we will update to duplicate_id instead
+                    target_id = target_song.duplicate_id
+                if DBSong.update(duplicate=target_id).where(
+                                (DBSong.id == source_id) | (DBSong.duplicate == source_id)).execute() == 0:
+                    raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
 
-    async def clear_failed_flag(self, song_id):
-        func = functools.partial(self._clear_failed_flag, song_id)
-        return await self._loop.run_in_executor(None, func)
+    @in_executor
+    def rename_song(self, song_id, new_title):  # intentionally kept as an instance method
+        if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+
+    @in_executor
+    def list_failed_songs(self):  # intentionally kept as an instance method
+        result = list()
+        for song in DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None).limit(20):
+            result.append((song.id, song.title))
+        return result
+
+    @in_executor
+    def clear_failed_flag(self, song_id):  # intentionally kept as an instance method
+        query = DBSong.update(has_failed=False)
+        if song_id is not None:
+            # apply only to a song specified
+            if query.where(DBSong.id == song_id).execute() != 1:
+                raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+        else:
+            # clear the flag for all the songs
+            query.where(DBSong.duplicate >> None).execute()
 
     #
     # Internally used methods and attributes
@@ -345,152 +657,10 @@ class SongManager:
                 duration = int(result['duration'])
             except (KeyError, ValueError):
                 raise RuntimeError('Failed to extract song duration')
-            song, created = DBSong.create_or_get(uuri=song_uuri, title=title, last_played=datetime.utcfromtimestamp(0),
+            song, created = DBSong.create_or_get(uuri=song_uuri, title=title,
+                                                 last_played=datetime.utcfromtimestamp(0),
                                                  duration=duration, credit_count=self._config_op_credit_cap)
         return song
-
-    def _get_next_song(self, user_id):
-        song = None
-        with self._database.atomic():
-            # check if there is an associated playlist
-            user = self._get_user(user_id)
-            if user.playlist_head_id is None:
-                raise LookupError('User\'s playlist is empty')
-
-            # join song link and song tables to obtain a result
-            link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == user.playlist_head_id) \
-                .get()
-            song = link.song
-
-            # now check if the link should be re-appended or deleted, update the pointers
-            if not user.rotate_playlist:
-                # update next song "pointer", should work in any situation
-                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
-                # delete the link
-                link.delete_instance()
-            elif link.next_id is not None:  # we should rotate and playlist does consist of multiple songs
-                # update next song "pointer"
-                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
-                # append the link at the end
-                DBSongLink.update(next=link.id).where(DBSongLink.next >> None).execute()
-                DBSongLink.update(next=None).where(DBSongLink.id == link.id).execute()
-
-            # check duplicate song flag and do the replacement if necessary
-            if song.duplicate_id is not None:
-                song = song.duplicate
-
-        # check the constrains
-        # -- blacklist
-        if song.is_blacklisted:
-            raise RuntimeError('Song [{}] was blacklisted by an operator'.format(song.id))
-        # -- last played
-        time_diff = datetime.now() - song.last_played
-        if time_diff.total_seconds() < self._config_op_interval:
-            raise RuntimeError('Song [{}] has been played recently'.format(song.id))
-        # -- credits remaining
-        if song.credit_count == 0:
-            raise RuntimeError('Song [{}] is overplayed'.format(song.id))
-        # -- check the song length
-        if song.duration > self._config_max_duration:
-            raise RuntimeError('Song [{}]\'s length exceeds the limit'.format(song.id))
-
-        # fetch the URL using youtube_dl
-        try:
-            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
-            if not song.has_failed:
-                log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
-                DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
-            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
-                                       song_title=song.title)
-
-        # there is a chance song was marked as failed before but it no longer applies, fix the flag
-        if song.has_failed:
-            log.info('Failed flag was removed from the song [{}] after a successful download'.format(song.id))
-            DBSong.update(has_failed=False).where(DBSong.id == song.id).execute()
-
-        return SongContext(user_id, song.id, song.title, song.duration, result['url'])
-
-    def _update_stats(self, song_ctx: SongContext):
-        current_time = datetime.now()
-        # update a song in the database -- hype, skip count, credit count, last played
-        song_query = DBSong.update(hype_count=DBSong.hype_count + song_ctx.hype_count,
-                                   skip_votes=DBSong.skip_votes + song_ctx.skip_votes,
-                                   play_count=DBSong.play_count + 1,
-                                   last_played=current_time, credit_count=DBSong.credit_count - 1) \
-            .where(DBSong.id == song_ctx.song_id)
-        # update a user in the database -- hype, skip count song received
-        user_query = DBUser.update(hype_count_got=DBUser.hype_count_got + song_ctx.hype_count,
-                                   skip_votes_got=DBUser.skip_votes_got + song_ctx.skip_votes,
-                                   play_count=DBUser.play_count + 1) \
-            .where(DBUser.discord_id == song_ctx.user_id)
-
-        # prepare all the other users which may not exist in the database
-        user_dict_list = [{'discord_id': user_id} for user_id in (song_ctx.get_hype_set() | song_ctx.get_skip_set())]
-        if user_dict_list:
-            DBUser.insert_many(user_dict_list).on_conflict('ignore').execute()
-        # now do the votes query which will update _given stats
-        hypes_query = DBUser.update(hype_count_given=DBUser.hype_count_given + 1)\
-            .where(DBUser.discord_id << song_ctx.get_hype_set())
-        skips_query = DBUser.update(skip_votes_given=DBUser.skip_votes_given + 1)\
-            .where(DBUser.discord_id << song_ctx.get_skip_set())
-
-        with self._database.atomic():
-            song_query.execute()
-            user_query.execute()
-            hypes_query.execute()
-            skips_query.execute()
-
-    def _get_autoplaylist_song(self):
-        reference_time = datetime.now() - \
-                         timedelta(seconds=self._config_op_interval)
-        query = DBSong.select(DBSong).where(
-            DBSong.last_played < reference_time,  # overplay protection interval
-            DBSong.hype_count >= self._config_ap_threshold,  # hype threshold
-            DBSong.skip_votes * self._config_ap_ratio <= DBSong.hype_count,  # hype to skip ratio
-            DBSong.duration <= self._config_max_duration,  # song duration
-            DBSong.credit_count > 0,  # overplay protection
-            ~DBSong.is_blacklisted,  # cannot be blacklisted
-            ~DBSong.has_failed,  # probably unavailable
-            DBSong.duplicate >> None  # not fair + outdated information
-        ).order_by(peewee.fn.Random())
-
-        try:
-            song = query.get()
-        except DBSong.DoesNotExist:
-            # there is no song conforming to the autoplaylist conditions
-            return None
-
-        try:
-            result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
-            log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
-            DBSong.update(has_failed=True).where(DBSong.id == song.id).execute()
-            raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
-                                       song_title=song.title)
-        return SongContext(None, song.id, song.title, song.duration, result['url'])
-
-    def _get_rotate_status(self, user_id):
-        user = self._get_user(user_id)
-        return user.rotate_playlist
-
-    def _set_rotate_status(self, user_id, rotate):
-        self._get_user(user_id)  # to make sure the user exists in a first place
-        DBUser.update(rotate_playlist=rotate).where(DBUser.discord_id == user_id).execute()
-
-    def _list_playlist(self, user_id, offset, limit):
-        result = list()
-        with self._database.atomic():
-            user = self._get_user(user_id)
-            current_link_id = user.playlist_head_id
-            for index in range(limit + offset):
-                if current_link_id is None:
-                    break
-                link = DBSongLink.select(DBSongLink, DBSong).join(DBSong).where(DBSongLink.id == current_link_id).get()
-                if index >= offset:
-                    result.append((link.song.id, link.song.title))
-                current_link_id = link.next_id
-        return result
 
     def _process_uris(self, uris, limit):
         song_list = list()
@@ -521,7 +691,8 @@ class SongManager:
                         except ValueError as e:
                             error_list.append(str(e))
                         except youtube_dl.DownloadError as e:
-                            error_list.append('Inserting `{}` from playlist failed: {}'.format(entry['url'], str(e)))
+                            error_list.append(
+                                'Inserting `{}` from playlist failed: {}'.format(entry['url'], str(e)))
                 except youtube_dl.DownloadError as e:
                     error_list.append('Processing list `{}` failed: {}'.format(uri, str(e)))
             else:  # should be a single song
@@ -533,229 +704,6 @@ class SongManager:
                     error_list.append('Inserting `{}` failed: {}'.format(uri, str(e)))
 
         return song_list, error_list, False
-
-    def _append_to_playlist(self, user_id, uris):
-        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
-        if count >= self._config_max_songs:
-            raise RuntimeError('Your playlist is full')
-        # assembly the list of songs for insertion
-        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
-        # now create the links in the database
-        with self._database.atomic():
-            user = self._get_user(user_id)
-
-            # atomically re-check the condition
-            to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
-            if to_insert <= 0:
-                raise RuntimeError('Your playlist is full')
-
-            connection_point = None
-            if user.playlist_head_id is not None:
-                connection_point = DBSongLink.get(DBSongLink.user == user_id, DBSongLink.next >> None)
-
-            previous_link = None
-            for song in song_list[to_insert - 1::-1]:
-                previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
-            # connect the chain created
-            if connection_point is not None:
-                connection_point.next_id = previous_link
-                connection_point.save()
-            else:
-                user.playlist_head_id = previous_link
-                user.save()
-
-        truncated |= len(song_list) > to_insert
-        inserted = min(len(song_list), to_insert)
-
-        return inserted, truncated, error_list
-
-    def _prepend_to_playlist(self, user_id, uris):
-        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
-        if count >= self._config_max_songs:
-            raise RuntimeError('Your playlist is full')
-        # assembly the list of songs for insertion
-        song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
-        # now create the links in the database
-        with self._database.atomic():
-            user = self._get_user(user_id)
-
-            # atomically re-check the condition
-            to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
-            if to_insert <= 0:
-                raise RuntimeError('Your playlist is full')
-
-            previous_link = user.playlist_head_id
-            for song in song_list[to_insert - 1::-1]:
-                previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
-            # connect the chain created
-            user.playlist_head_id = previous_link
-            user.save()
-
-        truncated |= len(song_list) > to_insert
-        inserted = min(len(song_list), to_insert)
-
-        return inserted, truncated, error_list
-
-    def _pop_from_playlist(self, user_id, count):
-        if count <= 0:
-            return 0
-
-        with self._database.atomic():
-            user = self._get_user(user_id)
-
-            deleted = 0
-            current_link = user.playlist_head
-            while deleted < count and current_link is not None:
-                next_link = current_link.next
-                current_link.delete_instance()
-                current_link = next_link
-                deleted += 1
-
-            user.playlist_head = current_link
-            user.save()
-
-        return deleted
-
-    def _push_to_playlist(self, user_id, keywords):
-        count = DBSongLink.select().where(DBSongLink.user == user_id).count()
-        if count >= self._config_max_songs:
-            raise RuntimeError('Your playlist is full')
-
-        search_url = 'ytsearch:{}'.format(' '.join(keywords))
-        try:
-            result = self._ytdl.extract_info(search_url, download=False)
-            song_url = self._url_base['yt'].format(result['entries'][0]['id'])
-        except Exception:
-            raise RuntimeError('Search returned no results')
-
-        song = self._get_song(song_url)
-        # now we need to prepend it
-        with self._database.atomic():
-            # atomically re-check the condition for the length
-            if DBSongLink.select().where(DBSongLink.user == user_id).count() >= self._config_max_songs:
-                raise RuntimeError('Your playlist is full')
-
-            # now do the insertion
-            user = self._get_user(user_id)
-            link = DBSongLink.create(user=user_id, song=song.id, next=user.playlist_head_id)
-            user.playlist_head = link
-            user.save()
-
-        # return the id and title
-        return song.id, song.title
-
-    def _shuffle_playlist(self, user_id):
-        query = DBSongLink.select().where(DBSongLink.user == user_id)
-        song_list = list()
-
-        # TODO: find a better way
-        # this approach is awfully inefficient, in most databases you can random shuffle column using a single query
-        # idea: join the table with randomly ordered selection on equal row numbers; update with the joined value
-        # problem: approach is totally non-portable
-        with self._database.atomic():
-            for item in query:
-                song_list.append(item.song_id)
-            random.shuffle(song_list)
-            for item, new_id in zip(query, song_list):
-                item.song_id = new_id
-                item.save()
-
-    def _clear_playlist(self, user_id):
-        update_query = DBUser.update(playlist_head=None).where(DBUser.discord_id == user_id)
-        delete_query = DBSongLink.delete().where(DBSongLink.user == user_id)
-        with self._database.atomic():
-            update_query.execute()
-            delete_query.execute()
-
-    def _add_to_blacklist(self, song_id):  # intentionally kept as an instance method
-        if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id).execute() != 1:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
-
-    def _remove_from_blacklist(self, song_id):  # intentionally kept as an instance method
-        if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id).execute() != 1:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
-
-    def _search_songs(self, keywords):  # intentionally kept as an instance method
-        query = DBSong.select(DBSong.id, DBSong.title)
-        for keyword in keywords:
-            keyword = '%{}%'.format(keyword)
-            query = query.where((DBSong.title ** keyword) | (DBSong.uuri ** keyword))
-        query = query.limit(20)
-
-        result = list()
-        for row in query:
-            result.append((row.id, row.title))
-        return result
-
-    def _get_song_info(self, song_id):  # intentionally kept as an instance method
-        try:
-            song = DBSong.get(id=song_id)
-            result = {'id': song.id, 'title': song.title, 'last_played': song.last_played, 'uuri': song.uuri,
-                      'hype_count': song.hype_count, 'total_hype_count': song.hype_count,
-                      'skip_votes': song.skip_votes, 'total_skip_votes': song.skip_votes,
-                      'play_count': song.play_count, 'total_play_count': song.play_count,
-                      'duration': song.duration, 'credits_remaining': song.credit_count,
-                      'blacklisted': song.is_blacklisted, 'failed': song.has_failed,
-                      'duplicates': None, 'duplicated_by': list()}
-            if song.duplicate_id is not None:
-                song2 = song.duplicate
-                result['duplicates'] = (song2.id, song2.title)
-                result['total_hype_count'] += song2.hype_count
-                result['total_skip_votes'] += song2.skip_votes
-                result['total_play_count'] += song2.play_count
-            duplicate_query = DBSong.select().where(DBSong.duplicate == song.id)
-            for song2 in duplicate_query:
-                result['duplicated_by'].append((song2.id, song2.title))
-                result['total_hype_count'] += song2.hype_count
-                result['total_skip_votes'] += song2.skip_votes
-                result['total_play_count'] += song2.play_count
-
-            return result
-        except DBSong.DoesNotExist:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
-
-    def _merge_songs(self, source_id, target_id):
-        if source_id == target_id:
-            # this is effectively a "split" call
-            if DBSong.update(duplicate=None).where(DBSong.id == source_id).execute() != 1:
-                raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
-        else:
-            with self._database.atomic():
-                try:
-                    target_song = DBSong.get(DBSong.id == target_id)
-                except DBSong.DoesNotExist:
-                    raise ValueError('Song [{}] cannot be found in the database'.format(target_id))
-
-                if target_song.duplicate_id == source_id:
-                    # we're "reassigning" the duplicate flags
-                    target_song.duplicate_id = None
-                    target_song.save()
-                elif target_song.duplicate_id is not None:
-                    # if a target is duplicate, we will update to duplicate_id instead
-                    target_id = target_song.duplicate_id
-                if DBSong.update(duplicate=target_id).where(
-                                (DBSong.id == source_id) | (DBSong.duplicate == source_id)).execute() == 0:
-                    raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
-
-    def _rename_song(self, song_id, new_title):  # intentionally kept as an instance method
-        if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
-
-    def _list_failed_songs(self):  # intentionally kept as an instance method
-        result = list()
-        for song in DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None).limit(20):
-            result.append((song.id, song.title))
-        return result
-
-    def _clear_failed_flag(self, song_id):  # intentionally kept as an instance method
-        query = DBSong.update(has_failed=False)
-        if song_id is not None:
-            # apply only to a song specified
-            if query.where(DBSong.id == song_id).execute() != 1:
-                raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
-        else:
-            # clear the flag for all the songs
-            query.where(DBSong.duplicate >> None).execute()
 
     async def _credit_renew(self):
         # check if the last timestamp is present in the database
