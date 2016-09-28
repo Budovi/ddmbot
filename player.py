@@ -225,9 +225,9 @@ class Player:
 
         await self._transition_lock.acquire()
         # now that we have the lock, set the initial state, this will prevent any interference before starting the FSM
-        if self._config['initial_state'] == 'playing':
+        if self._config['initial_state'].lower() == 'playing':
             self._next_state = PlayerState.DJ_PLAYING
-        elif self._config['initial_state'] != 'stopped':
+        elif self._config['initial_state'].lower() != 'stopped':
             log.error('Initial state is invalid, assuming \'stopped\'')
         self._player_task = self._bot.loop.create_task(self._player_fsm())
 
