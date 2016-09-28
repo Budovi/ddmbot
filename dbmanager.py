@@ -72,7 +72,7 @@ class DBUser(DBSchema):
     play_count = peewee.IntegerField(default=0)
 
     playlist_head = peewee.ForeignKeyField(DBSongLink, null=True, default=None)
-    rotate_playlist = peewee.BooleanField()
+    repeat_playlist = peewee.BooleanField()
 
 
 DeferredDBUser.set_model(DBUser)
@@ -167,7 +167,7 @@ def in_executor(method):
 
 class DBManager:
     def __init__(self, config, loop):
-        self._config_rotate = False
+        self._config_repeat = False
         self._config_ap_threshold = int(config['ap_hype_threshold'])
         self._config_ap_ratio = int(config['ap_hype_skip_ratio'])
         self._config_max_duration = int(config['length_limit'])
@@ -177,10 +177,10 @@ class DBManager:
         self._config_op_credit_renew = timedelta(hours=int(config['op_credit_renew']))
         self._loop = loop
 
-        if config['rotate_by_default'].lower() == 'true':
-            self._config_rotate = True
-        elif config['rotate_by_default'].lower() != 'false':
-            log.error('Default playlist rotate setting is invalid, assuming \'false\'')
+        if config['repeat_by_default'].lower() == 'true':
+            self._config_repeat = True
+        elif config['repeat_by_default'].lower() != 'false':
+            log.error('Default playlist repeat setting is invalid, assuming \'false\'')
 
         self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
                                            'no_color': True})
@@ -211,7 +211,7 @@ class DBManager:
     #
     @in_executor
     def interaction_check(self, user_id):
-        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'rotate_playlist': self._config_rotate})
+        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'repeat_playlist': self._config_repeat})
         if user.is_ignored:
             raise IgnoredUserError
         return created
@@ -224,7 +224,7 @@ class DBManager:
         song = None
         with self._database.atomic():
             # check if there is an associated playlist
-            user = DBUser.select(DBUser.playlist_head, DBUser.rotate_playlist).where(DBUser.discord_id == user_id).get()
+            user = DBUser.select(DBUser.playlist_head, DBUser.repeat_playlist).where(DBUser.discord_id == user_id).get()
             if user.playlist_head_id is None:
                 raise LookupError('User\'s playlist is empty')
 
@@ -234,12 +234,12 @@ class DBManager:
             song = link.song
 
             # now check if the link should be re-appended or deleted, update the pointers
-            if not user.rotate_playlist:
+            if not user.repeat_playlist:
                 # update next song "pointer", should work in any situation
                 DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user_id).execute()
                 # delete the link
                 link.delete_instance()
-            elif link.next_id is not None:  # we should rotate and playlist does consist of multiple songs
+            elif link.next_id is not None:  # we should repeat and playlist does consist of multiple songs
                 # update next song "pointer"
                 DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user_id).execute()
                 # append the link at the end
@@ -347,17 +347,17 @@ class DBManager:
     # User management
     #
     @in_executor
-    def get_rotate_status(self, user_id):
-        return DBUser.select(DBUser.rotate_playlist).where(DBUser.discord_id == user_id).get().rotate_playlist
+    def get_repeat_status(self, user_id):
+        return DBUser.select(DBUser.repeat_playlist).where(DBUser.discord_id == user_id).get().repeat_playlist
 
     @in_executor
-    def set_rotate_status(self, user_id, rotate):
-        DBUser.update(rotate_playlist=rotate).where(DBUser.discord_id == user_id).execute()
+    def set_repeat_status(self, user_id, repeat):
+        DBUser.update(repeat_playlist=repeat).where(DBUser.discord_id == user_id).execute()
 
     @in_executor
     def ignore_user(self, user_id):
         # we can technically ignore user that is not in the database yet
-        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'rotate_playlist': self._config_rotate,
+        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'repeat_playlist': self._config_repeat,
                                                                            'is_ignored': True})
         if created:
             log.warning('Ignoring user {} that is not in the database'.format(user_id))

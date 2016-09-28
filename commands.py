@@ -246,26 +246,27 @@ class CommandHandler:
         except ValueError:
             await self._bot.whisper('You are not in the DJ queue')
 
-    _rotate_help = 'Specify if your playlist should be rotated\n\nWithout an argument, returns your current setting. ' \
-                   'You can turn this feature on or off by passing \'on\' or \'off\' as an argument. When turned on, ' \
-                   'songs that have been played are put at the end of your playlist. They are removed otherwise.'
+    _repeat_help = 'Specify if your playlist should be repeated in a loop\n\nWithout an argument, returns your ' \
+                   'current setting. You can turn this feature on or off by passing \'on\' or \'off\' as an ' \
+                   'argument. When turned on, songs that have been played are put at the end of your playlist. They ' \
+                   'are removed otherwise.'
 
     @privileged(False)
-    @dec.command(pass_context=True, ignore_extra=False, help=_rotate_help)
-    async def rotate(self, ctx, setting: str=None):
+    @dec.command(pass_context=True, ignore_extra=False, help=_repeat_help)
+    async def repeat(self, ctx, setting: str=None):
         if setting is None:
-            if await self._database.get_rotate_status(int(ctx.message.author.id)):
-                await self._bot.whisper('Songs from your playlist are *rotated* after playing')
+            if await self._database.get_repeat_status(int(ctx.message.author.id)):
+                await self._bot.whisper('Your playlist is in a \'repeat\' mode (songs are *re-appended* after playing)')
             else:
-                await self._bot.whisper('Songs from your playlist are *removed* after playing')
+                await self._bot.whisper('Your playlist is in a \'play once\' mode (songs are *removed* after playing)')
         elif setting == 'on':
-            await self._database.set_rotate_status(int(ctx.message.author.id), True)
-            await self._bot.whisper('**Your playlist was set to _rotate_ songs that have been played**')
+            await self._database.set_repeat_status(int(ctx.message.author.id), True)
+            await self._bot.whisper('**Your playlist was set to \'repeat\' mode**')
         elif setting == 'off':
-            await self._database.set_rotate_status(int(ctx.message.author.id), False)
-            await self._bot.whisper('**Your playlist was set to _remove_ songs that have been played**')
+            await self._database.set_repeat_status(int(ctx.message.author.id), False)
+            await self._bot.whisper('**Your playlist was set to \'play once\' mode**')
         else:
-            await self._bot.whisper('Valid options for a rotate command are \'on\' and \'off\'')
+            await self._bot.whisper('Valid options for a repeat command are \'on\' and \'off\'')
 
     _kick_help = '* Kicks the specified user from the DJ queue\n\nThe user may be specified by it\'s username, nick ' \
                  'or mention.'
