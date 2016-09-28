@@ -465,6 +465,7 @@ class CommandHandler:
                         'located before the song name in the square brackets. It is included in the status message ' \
                         'and all the listings.'
 
+    @privileged(True)
     @dec.command(ignore_extra=False, help=_unblacklist_help)
     async def unblacklist(self, which: int):
         try:
