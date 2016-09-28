@@ -92,8 +92,7 @@ async def on_ready():
             for member in ddmbot.voice_channel.voice_members:
                 if member == ddmbot.user:
                     continue
-                if not member.voice.self_deaf:
-                    await users.add_listener(int(member.id), direct=False)
+                await users.add_listener(int(member.id), direct=False)
 
             log.info('Connecting to the voice channel')
             # obtain VoiceClient and initialize Player
