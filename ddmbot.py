@@ -184,7 +184,7 @@ if __name__ == '__main__':
 
             # create bot instance and register event hooks
             ddmbot = dec.Bot(command_prefix=config['commands']['delimiter'], pm_help=True,
-                             formatter=helpformatter.DdmBotHelpFormatter())
+                             formatter=helpformatter.DdmBotHelpFormatter(), help_attrs={'help':'Shows this message'})
             ddmbot.event(on_ready)
             ddmbot.event(on_message)
             ddmbot.event(on_error)
