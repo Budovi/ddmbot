@@ -172,12 +172,12 @@ class CommandHandler:
         await self._database.ignore_user(int(member.id))
         await self._message('User {} has been added to the ignore list'.format(member))
 
-    _unignore_help = '* Removes the user specified from the list of ignored users\n\nThe user may be specified by ' \
-                     'it\'s username, nick or mention.'
+    _grace_help = '* Removes the user specified from the list of ignored users\n\nThe user may be specified by it\'s ' \
+                  'username, nick or mention.'
 
     @privileged(True)
-    @dec.command(ignore_extra=False, help=_unignore_help)
-    async def unignore(self, member: discord.Member):
+    @dec.command(ignore_extra=False, help=_grace_help)
+    async def grace(self, member: discord.Member):
         await self._database.grace_user(int(member.id))
         await self._message('User {} successfully removed from the ignore list'.format(member))
 
