@@ -70,7 +70,7 @@ class DBUser(DBSchema):
     play_count = peewee.IntegerField(default=0)
 
     playlist_head = peewee.ForeignKeyField(DBSongLink, null=True, default=None)
-    rotate_playlist = peewee.BooleanField(default=False)
+    rotate_playlist = peewee.BooleanField()
 
 
 DeferredDBUser.set_model(DBUser)
@@ -161,6 +161,7 @@ def in_executor(method):
 
 class SongManager:
     def __init__(self, config, loop):
+        self._config_rotate = False
         self._config_ap_threshold = int(config['ap_hype_threshold'])
         self._config_ap_ratio = int(config['ap_hype_skip_ratio'])
         self._config_max_duration = int(config['length_limit'])
@@ -169,6 +170,11 @@ class SongManager:
         self._config_op_credit_cap = int(config['op_credit_cap'])
         self._config_op_credit_renew = timedelta(hours=int(config['op_credit_renew']))
         self._loop = loop
+
+        if config['rotate_by_default'].lower() == 'true':
+            self._config_rotate = True
+        elif config['rotate_by_default'].lower() != 'false':
+            log.error('Default playlist rotate setting is invalid, assuming \'false\'')
 
         self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
                                            'no_color': True})
@@ -633,9 +639,9 @@ class SongManager:
             return 'bc:{}:{}'.format(match.group('artist'), match.group('track'))
         return None
 
-    def _get_user(self, user_id):  # intentionally kept as an instance method
+    def _get_user(self, user_id):
         # this can be potentially the first query on the user
-        user, created = DBUser.get_or_create(discord_id=user_id)
+        user, created = DBUser.get_or_create(discord_id=user_id, rotate_playlist=self._config_rotate)
         return user
 
     def _get_song(self, song_url):
