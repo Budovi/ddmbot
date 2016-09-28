@@ -92,6 +92,9 @@ async def on_ready():
             for member in ddmbot.voice_channel.voice_members:
                 if member == ddmbot.user:
                     continue
+                with suppress(dbmanager.IgnoredUserError):
+                    if await database.interaction_check(int(member.id)):
+                        await ddmbot.send_message(member, config['general']['welcome_message'].format_map(config))
                 await users.add_listener(int(member.id), direct=False)
 
             log.info('Connecting to the voice channel')
@@ -116,7 +119,14 @@ async def on_ready():
 async def on_message(message):
     # author of the message wrote something, which is kinda a proof (s)he is alive
     await users.refresh_activity(int(message.author.id))
-    await ddmbot.process_commands(message)
+    # do ignore list pre-check ourselves if this appears to be a command
+    if message.content.lstrip().startswith(config['commands']['delimiter']):
+        if message.author not in ddmbot.text_channel.server.members:
+            return
+        with suppress(dbmanager.IgnoredUserError):
+            if await database.interaction_check(int(message.author.id)):
+                await ddmbot.send_message(message.author, config['general']['welcome_message'].format_map(config))
+            await ddmbot.process_commands(message)
 
 
 async def on_error(event, *args, **kwargs):
@@ -133,6 +143,9 @@ async def on_voice_state_update(before, after):
 
     # joining
     if before.voice.voice_channel != channel and after.voice.voice_channel == channel:
+        with suppress(dbmanager.IgnoredUserError):
+            if await database.interaction_check(int(after.id)):
+                await ddmbot.send_message(after, config['general']['welcome_message'].format_map(config))
         await users.add_listener(int(after.id), direct=False)
     # leaving
     elif before.voice.voice_channel == channel and after.voice.voice_channel != channel:
@@ -190,11 +203,9 @@ if __name__ == '__main__':
 
                 # ddmbot.start command is blocking
                 ddmbot.loop.run_until_complete(ddmbot.start(config['general']['token']))
-            except Exception as e:
+            except Exception:
                 raise
             finally:
-                # save the user blacklist
-                command_handler.ignorelist_save()
                 # cleanup
                 ddmbot.loop.run_until_complete(users.cleanup())
                 ddmbot.loop.run_until_complete(player.cleanup())
@@ -215,5 +226,5 @@ if __name__ == '__main__':
             if asyncio.get_event_loop().is_closed():
                 asyncio.set_event_loop(asyncio.new_event_loop())
 
-    except Exception as e:
+    except Exception:
         log.critical('DdmBot crashed with an exception', exc_info=True)

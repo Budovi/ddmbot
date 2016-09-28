@@ -43,8 +43,6 @@ class CommandHandler:
         self._database = database
         self._player = player
 
-        self._ignorelist = set()
-        self.ignorelist_load()
         self._restart_scheduled = False
 
         self._direct_stream_message = 'Playlist link: {}\nDirect link: `{}`\n\nPlease note that these links will ' \
@@ -85,12 +83,6 @@ class CommandHandler:
     # Common checks
     #
     def __check(self, ctx):
-        # check ignore list and membership
-        if ctx.message.author.id in self._ignorelist:
-            return False
-        if ctx.message.author not in self._bot.text_channel.server.members:
-            return False
-
         # if the channel is not private, delete the command immediately regardless of the response
         if not isinstance(ctx.message.channel, discord.PrivateChannel):
             self._bot.loop.create_task(self._bot.delete_message(ctx.message))
@@ -178,7 +170,7 @@ class CommandHandler:
         if self._operator_role in member.roles:
             raise dec.UserInputError('User {} is an operator and cannot be ignored'.format(member))
 
-        self._ignorelist.add(member.id)
+        await self._database.ignore_user(int(member.id))
         await self._message('User {} has been added to the ignore list'.format(member))
 
     _unignore_help = '*Operators only* Removes the user specified from the list of ignored users\n\nThe user may be ' \
@@ -187,10 +179,7 @@ class CommandHandler:
     @privileged(True)
     @dec.command(ignore_extra=False, help=_unignore_help)
     async def unignore(self, member: discord.Member):
-        if member.id not in self._ignorelist:
-            raise dec.UserInputError('User {} is not on the ignore list'.format(member))
-
-        self._ignorelist.remove(member.id)
+        await self._database.grace_user(int(member.id))
         await self._message('User {} successfully removed from the ignore list'.format(member))
 
     #
@@ -456,7 +445,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_blacklist_help)
     async def blacklist(self, which: int):
         try:
-            await self._database.add_to_blacklist(which)
+            await self._database.blacklist_song(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been blacklisted'.format(which))
@@ -469,7 +458,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_unblacklist_help)
     async def unblacklist(self, which: int):
         try:
-            await self._database.remove_from_blacklist(which)
+            await self._database.permit_song(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been removed from blacklist'.format(which))
@@ -588,37 +577,6 @@ class CommandHandler:
                                 .format(song_id))
         else:
             await self._message('Flags indicating download failures have been cleared')
-
-    #
-    # Ignore list load and save
-    #
-    def ignorelist_load(self):
-        try:
-            with open(self._config['ignorelist_file'], 'r') as file:
-                for line in file:
-                    if line.lstrip().startswith(';'):
-                        continue
-                    # leave the id in the string format for now for a quicker comparison
-                    self._ignorelist.add(line.split()[0])
-        except FileNotFoundError:
-            log.warning('File containing ignore list not found, a new one will be written on bot shutdown')
-
-    def ignorelist_save(self):
-        with open(self._config['ignorelist_file'], 'w') as file:
-            file.write(
-                '; DdmBot user ignore list file\n'
-                ';   This file contains blacklisted users. You can modify this file offline, use\n'
-                '; commands to edit the blacklist when the bot is running.\n'
-                ';   One user ID per line, lines starting with a semicolon are ignored. Text\n'
-                '; following user ID (separated by a space) is ignored too. File is automatically\n'
-                '; generated and overwritten on bot shutdown. You have been warned.\n'
-            )
-            for user_id in self._ignorelist:
-                member = discord.utils.get(self._bot.get_all_members(), id=user_id)
-                if member is None:
-                    file.write('{} <unknown username>\n'.format(user_id))
-                else:
-                    file.write('{} {}\n'.format(user_id, member))
 
     #
     # Helper methods

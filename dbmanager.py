@@ -63,6 +63,8 @@ class DBSongLink(DBSchema):
 class DBUser(DBSchema):
     discord_id = peewee.BigIntegerField(primary_key=True)
 
+    is_ignored = peewee.BooleanField(default=False)
+
     hype_count_got = peewee.IntegerField(default=0)
     hype_count_given = peewee.IntegerField(default=0)
     skip_votes_got = peewee.IntegerField(default=0)
@@ -74,6 +76,10 @@ class DBUser(DBSchema):
 
 
 DeferredDBUser.set_model(DBUser)
+
+
+class IgnoredUserError(Exception):
+    pass
 
 
 class UnavailableSongError(Exception):
@@ -201,6 +207,16 @@ class DBManager:
                 await self._credit_task
 
     #
+    # Interface for first interactions
+    #
+    @in_executor
+    def interaction_check(self, user_id):
+        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'rotate_playlist': self._config_rotate})
+        if user.is_ignored:
+            raise IgnoredUserError
+        return created
+
+    #
     # Interface to be used by a player
     #
     @in_executor
@@ -208,7 +224,7 @@ class DBManager:
         song = None
         with self._database.atomic():
             # check if there is an associated playlist
-            user = self._get_user(user_id)
+            user = DBUser.select(DBUser.playlist_head, DBUser.rotate_playlist).where(DBUser.discord_id == user_id).get()
             if user.playlist_head_id is None:
                 raise LookupError('User\'s playlist is empty')
 
@@ -220,12 +236,12 @@ class DBManager:
             # now check if the link should be re-appended or deleted, update the pointers
             if not user.rotate_playlist:
                 # update next song "pointer", should work in any situation
-                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user_id).execute()
                 # delete the link
                 link.delete_instance()
             elif link.next_id is not None:  # we should rotate and playlist does consist of multiple songs
                 # update next song "pointer"
-                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user.discord_id).execute()
+                DBUser.update(playlist_head=link.next_id).where(DBUser.discord_id == user_id).execute()
                 # append the link at the end
                 DBSongLink.update(next=link.id).where(DBSongLink.next >> None).execute()
                 DBSongLink.update(next=None).where(DBSongLink.id == link.id).execute()
@@ -328,17 +344,32 @@ class DBManager:
         return SongContext(None, song.id, song.title, song.duration, result['url'])
 
     #
-    # User operations
+    # User management
     #
     @in_executor
     def get_rotate_status(self, user_id):
-        user = self._get_user(user_id)
-        return user.rotate_playlist
+        return DBUser.select(DBUser.rotate_playlist).where(DBUser.discord_id == user_id).get().rotate_playlist
 
     @in_executor
     def set_rotate_status(self, user_id, rotate):
-        self._get_user(user_id)  # to make sure the user exists in a first place
         DBUser.update(rotate_playlist=rotate).where(DBUser.discord_id == user_id).execute()
+
+    @in_executor
+    def ignore_user(self, user_id):
+        # we can technically ignore user that is not in the database yet
+        user, created = DBUser.get_or_create(discord_id=user_id, defaults={'rotate_playlist': self._config_rotate,
+                                                                           'is_ignored': True})
+        if created:
+            log.warning('Ignoring user {} that is not in the database'.format(user_id))
+        else:
+            if user.is_ignored:
+                raise ValueError('User is on the ignore list already')
+            DBUser.update(is_ignored=True).where(DBUser.discord_id == user_id).execute()
+
+    @in_executor
+    def grace_user(self, user_id):
+        if DBUser.update(is_ignored=False).where(DBUser.discord_id == user_id, DBUser.is_ignored).execute() != 1:
+            raise ValueError('User is not on the ignore list')
 
     #
     # Playlist operations
@@ -347,8 +378,8 @@ class DBManager:
     def list_playlist(self, user_id, offset, limit):
         result = list()
         with self._database.atomic():
-            user = self._get_user(user_id)
-            current_link_id = user.playlist_head_id
+            current_link_id = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id
             for index in range(limit + offset):
                 if current_link_id is None:
                     break
@@ -367,17 +398,17 @@ class DBManager:
         song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
         # now create the links in the database
         with self._database.atomic():
-            user = self._get_user(user_id)
-
             # atomically re-check the condition
             to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
             if to_insert <= 0:
                 raise RuntimeError('Your playlist is full')
-
+            # store a connection point
+            has_playlist = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id is not None
             connection_point = None
-            if user.playlist_head_id is not None:
+            if has_playlist:
                 connection_point = DBSongLink.get(DBSongLink.user == user_id, DBSongLink.next >> None)
-
+            # create a chain of songs to append
             previous_link = None
             for song in song_list[to_insert - 1::-1]:
                 previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
@@ -386,8 +417,7 @@ class DBManager:
                 connection_point.next_id = previous_link
                 connection_point.save()
             else:
-                user.playlist_head_id = previous_link
-                user.save()
+                DBUser.update(playlist_head=previous_link).where(DBUser.discord_id == user_id).execute()
 
         truncated |= len(song_list) > to_insert
         inserted = min(len(song_list), to_insert)
@@ -403,19 +433,17 @@ class DBManager:
         song_list, error_list, truncated = self._process_uris(uris, self._config_max_songs - count)
         # now create the links in the database
         with self._database.atomic():
-            user = self._get_user(user_id)
-
             # atomically re-check the condition
             to_insert = self._config_max_songs - DBSongLink.select().where(DBSongLink.user == user_id).count()
             if to_insert <= 0:
                 raise RuntimeError('Your playlist is full')
-
-            previous_link = user.playlist_head_id
+            # create a song chain to prepend
+            previous_link = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id
             for song in song_list[to_insert - 1::-1]:
                 previous_link = DBSongLink.create(user=user_id, song=song.id, next=previous_link).id
             # connect the chain created
-            user.playlist_head_id = previous_link
-            user.save()
+            DBUser.update(playlist_head=previous_link).where(DBUser.discord_id == user_id).execute()
 
         truncated |= len(song_list) > to_insert
         inserted = min(len(song_list), to_insert)
@@ -428,18 +456,17 @@ class DBManager:
             return 0
 
         with self._database.atomic():
-            user = self._get_user(user_id)
-
             deleted = 0
-            current_link = user.playlist_head
+            # remove *count* links
+            current_link = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id
             while deleted < count and current_link is not None:
-                next_link = current_link.next
-                current_link.delete_instance()
+                next_link = DBSongLink.select(DBSongLink.next).where(DBSongLink.id == current_link).get().next_id
+                DBSongLink.delete().where(DBSongLink.id == current_link).execute()
                 current_link = next_link
                 deleted += 1
-
-            user.playlist_head = current_link
-            user.save()
+            # update the playlist head
+            DBUser.update(playlist_head=current_link).where(DBUser.discord_id == user_id).execute()
 
         return deleted
 
@@ -464,10 +491,10 @@ class DBManager:
                 raise RuntimeError('Your playlist is full')
 
             # now do the insertion
-            user = self._get_user(user_id)
-            link = DBSongLink.create(user=user_id, song=song.id, next=user.playlist_head_id)
-            user.playlist_head = link
-            user.save()
+            playlist_head = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id
+            new_link = DBSongLink.create(user=user_id, song=song.id, next=playlist_head)
+            DBUser.update(playlist_head=new_link.id).where(DBUser.discord_id == user_id).execute()
 
         # return the id and title
         return song.id, song.title
@@ -501,17 +528,17 @@ class DBManager:
     # Song management
     #
     @in_executor
-    def add_to_blacklist(self, song_id):  # intentionally kept as an instance method
-        if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id).execute() != 1:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+    def blacklist_song(self, song_id):
+        if DBSong.update(is_blacklisted=True).where(DBSong.id == song_id, ~DBSong.is_blacklisted).execute() != 1:
+            raise ValueError('Song [{}] does not exist or it is blacklisted already'.format(song_id))
 
     @in_executor
-    def remove_from_blacklist(self, song_id):  # intentionally kept as an instance method
-        if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id).execute() != 1:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+    def permit_song(self, song_id):  # intentionally kept as an instance method
+        if DBSong.update(is_blacklisted=False).where(DBSong.id == song_id, DBSong.is_blacklisted).execute() != 1:
+            raise ValueError('Song [{}] does not exist or it is not blacklisted'.format(song_id))
 
     @in_executor
-    def search_songs(self, keywords):  # intentionally kept as an instance method
+    def search_songs(self, keywords):
         query = DBSong.select(DBSong.id, DBSong.title)
         for keyword in keywords:
             keyword = '%{}%'.format(keyword)
@@ -524,7 +551,7 @@ class DBManager:
         return result
 
     @in_executor
-    def get_song_info(self, song_id):  # intentionally kept as an instance method
+    def get_song_info(self, song_id):
         try:
             song = DBSong.get(id=song_id)
             result = {'id': song.id, 'title': song.title, 'last_played': song.last_played, 'uuri': song.uuri,
@@ -576,19 +603,19 @@ class DBManager:
                     raise ValueError('Song [{}] cannot be found in the database'.format(source_id))
 
     @in_executor
-    def rename_song(self, song_id, new_title):  # intentionally kept as an instance method
+    def rename_song(self, song_id, new_title):
         if DBSong.update(title=new_title).where(DBSong.id == song_id).execute() != 1:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
     @in_executor
-    def list_failed_songs(self):  # intentionally kept as an instance method
+    def list_failed_songs(self):
         result = list()
         for song in DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None).limit(20):
             result.append((song.id, song.title))
         return result
 
     @in_executor
-    def clear_failed_flag(self, song_id):  # intentionally kept as an instance method
+    def clear_failed_flag(self, song_id):
         query = DBSong.update(has_failed=False)
         if song_id is not None:
             # apply only to a song specified
@@ -638,11 +665,6 @@ class DBManager:
         if match:
             return 'bc:{}:{}'.format(match.group('artist'), match.group('track'))
         return None
-
-    def _get_user(self, user_id):
-        # this can be potentially the first query on the user
-        user, created = DBUser.get_or_create(discord_id=user_id, rotate_playlist=self._config_rotate)
-        return user
 
     def _get_song(self, song_url):
         song_uuri = self._make_uuri(song_url)
