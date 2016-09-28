@@ -432,7 +432,7 @@ class CommandHandler:
     async def list(self, ctx, start: int = 1):
         ordinal = lambda n: "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
 
-        items = await self._database.list_playlist(int(ctx.message.author.id), start - 1, 20)
+        items, total = await self._database.list_playlist(int(ctx.message.author.id), start - 1, 20)
         if not items:
             if start == 1:
                 await self._bot.whisper('Your playlist is empty')
@@ -440,7 +440,8 @@ class CommandHandler:
                 await self._bot.whisper('You don\'t have any songs in your playlist starting from the {}'
                                         .format(ordinal(start)))
             return
-        reply = '**20 songs from your playlist, starting from the {}:**\n **>** '.format(ordinal(start)) + \
+        reply = '**{} songs (out of {}) from your playlist, starting from the {}:**\n **>** ' \
+                .format(len(items), total, ordinal(start)) + \
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
@@ -515,17 +516,17 @@ class CommandHandler:
         await self._message('Song [{}] has been renamed to "{}"'.format(which, new_title))
 
     _search_help = 'Searches the database for a song\n\nTitle and UURI are searched. All the keywords must match ' \
-                   'either the title or UURI. First 20 results are returned.\nThis command can be used to look up ' \
+                   'either the title or UURI. Up to 20 results are returned.\nThis command can be used to look up ' \
                    'song IDs.'
 
     @privileged(False)
     @dec.command(ignore_extra=False, help=_search_help)
     async def search(self, *keywords: str):
-        items = await self._database.search_songs(keywords)
+        items, total = await self._database.search_songs(keywords, 20)
         if not items:
             await self._bot.whisper('Search for songs with keywords {} has not returned any result'.format(keywords))
             return
-        reply = '**First 20 songs matching the keywords {}:**\n **>** '.format(keywords) + \
+        reply = '**{} songs (out of {}) matching the keywords {}:**\n **>** '.format(len(items), total, keywords) + \
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
@@ -552,7 +553,7 @@ class CommandHandler:
                 '    **Is duplicated by:** {duplicated_by}'.format_map(info)
         await self._bot.whisper(reply)
 
-    _list_failed_help = 'Returns a list of the songs that have failed to download\n\nFirst 20 results are returned. ' \
+    _list_failed_help = 'Returns a list of the songs that have failed to download\n\nUp to 20 results are returned. ' \
                         'Songs that are marked as a duplicate (thus resolved) are not included in the results.\n\n' \
                         'Songs that have failed to download are excluded form the automatic playlist. Operators ' \
                         'should investigate download issues and provide an alternative source if necessary.\nSongs ' \
@@ -562,11 +563,11 @@ class CommandHandler:
     @privileged(False)
     @dec.command(ignore_extra=False, help=_list_failed_help)
     async def list_failed(self):
-        items = await self._database.list_failed_songs()
+        items, total = await self._database.list_failed_songs(20)
         if not items:
             await self._bot.whisper('There are no songs flagged because of a download failure')
             return
-        reply = '**First 20 songs flagged because of a download failure:**\n **>** ' + \
+        reply = '**{} songs (out of {}) flagged because of a download failure:**\n **>** '.format(len(items), total) + \
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 

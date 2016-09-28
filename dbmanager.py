@@ -378,6 +378,7 @@ class DBManager:
     def list_playlist(self, user_id, offset, limit):
         result = list()
         with self._database.atomic():
+            total = DBSongLink.select().where(DBSongLink.user == user_id).count()
             current_link_id = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
                 .playlist_head_id
             for index in range(limit + offset):
@@ -387,7 +388,7 @@ class DBManager:
                 if index >= offset:
                     result.append((link.song.id, link.song.title))
                 current_link_id = link.next_id
-        return result
+        return result, total
 
     @in_executor
     def append_to_playlist(self, user_id, uris):
@@ -576,17 +577,16 @@ class DBManager:
             raise ValueError('Song [{}] does not exist or it is not blacklisted'.format(song_id))
 
     @in_executor
-    def search_songs(self, keywords):
+    def search_songs(self, keywords, limit):
         query = DBSong.select(DBSong.id, DBSong.title)
         for keyword in keywords:
             keyword = '%{}%'.format(keyword)
             query = query.where((DBSong.title ** keyword) | (DBSong.uuri ** keyword))
-        query = query.limit(20)
-
+        total = query.count()
         result = list()
-        for row in query:
+        for row in query.limit(limit):
             result.append((row.id, row.title))
-        return result
+        return result, total
 
     @in_executor
     def get_song_info(self, song_id):
@@ -646,11 +646,13 @@ class DBManager:
             raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
 
     @in_executor
-    def list_failed_songs(self):
+    def list_failed_songs(self, limit):
+        query = DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None)
+        total = query.count()
         result = list()
-        for song in DBSong.select(DBSong.id, DBSong.title).where(DBSong.has_failed, DBSong.duplicate >> None).limit(20):
+        for song in query.limit(limit):
             result.append((song.id, song.title))
-        return result
+        return result, total
 
     @in_executor
     def clear_failed_flag(self, song_id):
