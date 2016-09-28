@@ -11,7 +11,7 @@ import discord.ext.commands as dec
 
 import commands
 import player as pl
-import songmanager
+import dbmanager
 import streamserver
 import usermanager
 
@@ -179,15 +179,15 @@ if __name__ == '__main__':
             # create all the other helpful classes
             stream = streamserver.StreamServer(config['stream_server'], ddmbot.loop)
             users = usermanager.UserManager(config['users'], ddmbot, stream)
-            songs = songmanager.SongManager(config['songs'], ddmbot.loop)
-            player = pl.Player(config['player'], ddmbot, users, songs)
+            database = dbmanager.DBManager(config['songs'], ddmbot.loop)
+            player = pl.Player(config['player'], ddmbot, users, database)
 
-            command_handler = commands.CommandHandler(config['commands'], ddmbot, users, songs, player)
+            command_handler = commands.CommandHandler(config['commands'], ddmbot, users, database, player)
 
             try:
-                # SongManager can be initialized straight away
+                # DBManager can be initialized straight away
                 # Other objects are initialized when the bot is connected
-                songs.init()
+                database.init()
 
                 # ddmbot.start command is blocking
                 ddmbot.loop.run_until_complete(ddmbot.start(config['general']['token']))
@@ -201,7 +201,7 @@ if __name__ == '__main__':
                 ddmbot.loop.run_until_complete(player.cleanup())
                 ddmbot.loop.run_until_complete(stream.cleanup())
                 ddmbot.loop.run_until_complete(ddmbot.logout())  # should be save to call multiple times
-                ddmbot.loop.run_until_complete(songs.cleanup())
+                ddmbot.loop.run_until_complete(database.cleanup())
                 # close the loop, this will ensure nothing is scheduled to run anymore
                 ddmbot.loop.close()
 

@@ -15,7 +15,7 @@ from contextlib import suppress
 import discord.utils
 import youtube_dl
 
-from songmanager import UnavailableSongError
+from dbmanager import UnavailableSongError
 
 # set up the logger
 log = logging.getLogger('ddmbot.player')
@@ -171,7 +171,7 @@ class PlayerState(enum.Enum):
 
 
 class Player:
-    def __init__(self, config, bot, users, songs):
+    def __init__(self, config, bot, users, database):
         self._config_skip_ratio = float(config['skip_ratio'])
         self._config_pipe_size = int(config['pcm_pipe_size'])
         if self._config_pipe_size > 2**31 or self._config_pipe_size <= 0:
@@ -179,7 +179,7 @@ class Player:
         self._config = config
         self._bot = bot
         self._users = users
-        self._songs = songs
+        self._database = database
 
         # initial state is stopped
         self._state = PlayerState.STOPPED
@@ -440,7 +440,7 @@ class Player:
     async def _get_song(self, dj, retries=3):
         for _ in range(retries):
             try:
-                song = await self._songs.get_next_song(dj)
+                song = await self._database.get_next_song(dj)
             except LookupError:  # no more songs in DJ's playlist
                 await self._users.leave_queue(dj)
                 await self._whisper(dj, 'Your playlist is empty. Please add more songs and rejoin the DJ queue.')
@@ -569,7 +569,7 @@ class Player:
 
                     # ok, now we should just pick a song and play it
                     try:
-                        self._song_context = await self._songs.get_autoplaylist_song()
+                        self._song_context = await self._database.get_autoplaylist_song()
                     except UnavailableSongError as e:
                         # we need to log this to the logging channel
                         await self._log('Song [{}] *{}* was flagged due to a download error'
@@ -617,7 +617,7 @@ class Player:
             # update song stats
             if self.playing:
                 # we need to actually wait for this to ensure proper functionality of overplaying protection
-                await self._songs.update_stats(self._song_context)
+                await self._database.update_stats(self._song_context)
                 self._song_context = None
 
             # if we were in cooldown, cancel cooldown task if not finished

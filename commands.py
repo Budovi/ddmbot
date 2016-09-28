@@ -36,11 +36,11 @@ class InvalidChannel(dec.CommandError):
 # Main COG class for DdmBot
 #
 class CommandHandler:
-    def __init__(self, config, bot, users, songs, player):
+    def __init__(self, config, bot, users, database, player):
         self._config = config
         self._bot = bot
         self._users = users
-        self._songs = songs
+        self._database = database
         self._player = player
 
         self._ignorelist = set()
@@ -266,15 +266,15 @@ class CommandHandler:
     @dec.command(pass_context=True, ignore_extra=False, help=_rotate_help)
     async def rotate(self, ctx, setting: str=None):
         if setting is None:
-            if await self._songs.get_rotate_status(int(ctx.message.author.id)):
+            if await self._database.get_rotate_status(int(ctx.message.author.id)):
                 await self._bot.whisper('Songs from your playlist are *rotated* after playing')
             else:
                 await self._bot.whisper('Songs from your playlist are *removed* after playing')
         elif setting == 'on':
-            await self._songs.set_rotate_status(int(ctx.message.author.id), True)
+            await self._database.set_rotate_status(int(ctx.message.author.id), True)
             await self._bot.whisper('**Your playlist was set to _rotate_ songs that have been played**')
         elif setting == 'off':
-            await self._songs.set_rotate_status(int(ctx.message.author.id), False)
+            await self._database.set_rotate_status(int(ctx.message.author.id), False)
             await self._bot.whisper('**Your playlist was set to _remove_ songs that have been played**')
         else:
             await self._bot.whisper('Valid options for a rotate command are \'on\' and \'off\'')
@@ -351,7 +351,7 @@ class CommandHandler:
                                 'modify your playlist multiple times at once may yield unexpected results and is more '
                                 'likely to fail.')
         # now do the operation
-        inserted, truncated, error_list = await self._songs.append_to_playlist(int(ctx.message.author.id), uris)
+        inserted, truncated, error_list = await self._database.append_to_playlist(int(ctx.message.author.id), uris)
         reply = '**{} song(s) appended**\n**{} insertions failed**'.format(inserted, len(error_list))
         if truncated:
             reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
@@ -372,7 +372,7 @@ class CommandHandler:
                                 'modify your playlist multiple times at once may yield unexpected results and is more '
                                 'likely to fail.')
         # now do the operation
-        inserted, truncated, error_list = await self._songs.prepend_to_playlist(int(ctx.message.author.id), uris)
+        inserted, truncated, error_list = await self._database.prepend_to_playlist(int(ctx.message.author.id), uris)
         reply = '**{} song(s) prepended**\n**{} insertions failed**'.format(inserted, len(error_list))
         if truncated:
             reply += '\n__**Part of the input was omitted due to playlist length restrictions.**__'
@@ -386,7 +386,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_pop_help)
     async def pop(self, ctx, count: int=1):
-        real_count = await self._songs.pop_from_playlist(int(ctx.message.author.id), count)
+        real_count = await self._database.pop_from_playlist(int(ctx.message.author.id), count)
 
         reply = '**{} song(s) removed from your playlist**'.format(real_count)
         if real_count < count:
@@ -402,7 +402,7 @@ class CommandHandler:
         if not keywords:
             raise dec.UserInputError('You must specify at least one keyword to search')
 
-        song_id, song_title = await self._songs.push_to_playlist(int(ctx.message.author.id), keywords)
+        song_id, song_title = await self._database.push_to_playlist(int(ctx.message.author.id), keywords)
         await self._bot.whisper('**Song** [{}] {} **was added to your playlist.** If this is not correct, you can '
                                 'remove it by using the *pop* command.'.format(song_id, song_title))
 
@@ -411,7 +411,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_clear_help)
     async def clear(self, ctx):
-        await self._songs.clear_playlist(int(ctx.message.author.id))
+        await self._database.clear_playlist(int(ctx.message.author.id))
         await self._bot.whisper('**Your playlist was cleared**')
 
     _shuffle_help = 'Shuffles your playlist\n\nShuffles all the songs in your playlist in a random manner.'
@@ -419,7 +419,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_shuffle_help)
     async def shuffle(self, ctx):
-        await self._songs.shuffle_playlist(int(ctx.message.author.id))
+        await self._database.shuffle_playlist(int(ctx.message.author.id))
         await self._bot.whisper('**Your playlist was shuffled**')
 
     _list_help = 'Lists the songs in your playlist\n\nDue to message length restrictions, up to 20 songs are ' \
@@ -432,7 +432,7 @@ class CommandHandler:
     async def list(self, ctx, start: int = 1):
         ordinal = lambda n: "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
 
-        items = await self._songs.list_playlist(int(ctx.message.author.id), start - 1, 20)
+        items = await self._database.list_playlist(int(ctx.message.author.id), start - 1, 20)
         if not items:
             if start == 1:
                 await self._bot.whisper('Your playlist is empty')
@@ -456,7 +456,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_blacklist_help)
     async def blacklist(self, which: int):
         try:
-            await self._songs.add_to_blacklist(which)
+            await self._database.add_to_blacklist(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been blacklisted'.format(which))
@@ -468,7 +468,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_unblacklist_help)
     async def unblacklist(self, which: int):
         try:
-            await self._songs.remove_from_blacklist(which)
+            await self._database.remove_from_blacklist(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been removed from blacklist'.format(which))
@@ -483,7 +483,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_deduplicate_help)
     async def deduplicate(self, which: int, target: int):
         try:
-            await self._songs.merge_songs(which, target)
+            await self._database.merge_songs(which, target)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as a duplicate of the song [{}]'.format(which, target))
@@ -495,7 +495,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_split_help)
     async def split(self, which: int):
         try:
-            await self._songs.split_song(which)
+            await self._database.split_song(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as unique'.format(which))
@@ -509,7 +509,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_rename_help)
     async def rename(self, which: int, new_title: str):
         try:
-            await self._songs.rename_song(which, new_title)
+            await self._database.rename_song(which, new_title)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been renamed to "{}"'.format(which, new_title))
@@ -521,7 +521,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(ignore_extra=False, help=_search_help)
     async def search(self, *keywords: str):
-        items = await self._songs.search_songs(keywords)
+        items = await self._database.search_songs(keywords)
         if not items:
             await self._bot.whisper('Search for songs with keywords {} has not returned any result'.format(keywords))
             return
@@ -535,7 +535,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_info_help)
     async def info(self, which: int):
         try:
-            info = await self._songs.get_song_info(which)
+            info = await self._database.get_song_info(which)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         reply = '**Song [{id}] information:**\n' \
@@ -562,7 +562,7 @@ class CommandHandler:
     @privileged(False)
     @dec.command(ignore_extra=False, help=_list_failed_help)
     async def list_failed(self):
-        items = await self._songs.list_failed_songs()
+        items = await self._database.list_failed_songs()
         if not items:
             await self._bot.whisper('There are no songs flagged because of a download failure')
             return
@@ -579,7 +579,7 @@ class CommandHandler:
     @dec.command(ignore_extra=False, help=_clear_failed_help)
     async def clear_failed(self, song_id: int=None):
         try:
-            await self._songs.clear_failed_flag(song_id)
+            await self._database.clear_failed_flag(song_id)
         except ValueError as e:
             raise dec.UserInputError(str(e))
         if song_id is not None:

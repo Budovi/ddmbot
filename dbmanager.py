@@ -10,7 +10,7 @@ import peewee
 import youtube_dl
 
 # set up the logger
-log = logging.getLogger('ddmbot.songmanager')
+log = logging.getLogger('ddmbot.dbmanager')
 
 # database object
 # TODO: can we get rid of this 'ugly global'?
@@ -150,7 +150,7 @@ class SongContext:
         return self._skips
 
 
-# decorator for SongManager interface methods
+# decorator for DBManager interface methods
 def in_executor(method):
     def wrapped_method(self, *args, **kwargs):
         func = functools.partial(method, self, *args, **kwargs)
@@ -159,7 +159,7 @@ def in_executor(method):
     return wrapped_method
 
 
-class SongManager:
+class DBManager:
     def __init__(self, config, loop):
         self._config_rotate = False
         self._config_ap_threshold = int(config['ap_hype_threshold'])
@@ -615,11 +615,11 @@ class SongManager:
     @staticmethod
     def _make_url(song_uuri):
         uuri_parts = song_uuri.split(':')
-        return SongManager._url_base[uuri_parts[0]].format(*uuri_parts[1:])
+        return DBManager._url_base[uuri_parts[0]].format(*uuri_parts[1:])
 
     @staticmethod
     def _is_list(input_url):
-        return SongManager._list_regex.match(input_url) is not None
+        return DBManager._list_regex.match(input_url) is not None
 
     @staticmethod
     def _make_uuri(song_url):
@@ -628,13 +628,13 @@ class SongManager:
         #   yt:<youtube_id> for youtube video
         #   sc:<artist>:<track> for soundcloud
         #   bc:<artist>:<track> for bandcamp
-        match = SongManager._yt_regex.match(song_url)
+        match = DBManager._yt_regex.match(song_url)
         if match:
             return 'yt:{}'.format(match.group('id'))
-        match = SongManager._sc_regex.match(song_url)
+        match = DBManager._sc_regex.match(song_url)
         if match:
             return 'sc:{}:{}'.format(match.group('artist'), match.group('track'))
-        match = SongManager._bc_regex.match(song_url)
+        match = DBManager._bc_regex.match(song_url)
         if match:
             return 'bc:{}:{}'.format(match.group('artist'), match.group('track'))
         return None
