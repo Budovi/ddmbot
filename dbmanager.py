@@ -31,7 +31,7 @@ class DBSong(DBSchema):
     id = peewee.PrimaryKeyField()
 
     # song unique URI for consistent lookup and search
-    uuri = peewee.CharField(index=True)
+    uuri = peewee.CharField(index=True, unique=True)
     # title can be changed eventually
     title = peewee.CharField()
     last_played = peewee.DateTimeField()
