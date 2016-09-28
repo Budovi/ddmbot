@@ -517,6 +517,44 @@ class DBManager:
                 item.save()
 
     @in_executor
+    def delete_from_playlist(self, user_id, song_id):
+        deleted = 0
+        with self._database.atomic():
+            # first cycle needs to handle the 'head pointer'
+            playlist_head = DBUser.select(DBUser.playlist_head).where(DBUser.discord_id == user_id).get() \
+                .playlist_head_id
+            if playlist_head is None:
+                return deleted
+            current_link = DBSongLink.get(DBSongLink.id == playlist_head)
+            while current_link is not None and current_link.song_id == song_id:
+                next_link = current_link.next
+                current_link.delete_instance()
+                current_link = next_link
+                deleted += 1
+            if current_link is None:
+                # playlist remained empty
+                DBUser.update(playlist_head=None).where(DBUser.discord_id == user_id).execute()
+                return deleted
+            # playlist won't be empty
+            DBUser.update(playlist_head=current_link.id).where(DBUser.discord_id == user_id).execute()
+
+            # do a second loop which is "link-only" thus better
+            previous_link = current_link
+            current_link = current_link.next
+            while current_link is not None:
+                next_link = current_link.next
+                if current_link.song_id == song_id:
+                    # we will need to delete the current link
+                    DBSongLink.update(next=current_link.next_id).where(DBSongLink.id == previous_link.id).execute()
+                    current_link.delete_instance()
+                    deleted += 1
+                else:
+                    previous_link = current_link
+                current_link = next_link
+
+        return deleted
+
+    @in_executor
     def clear_playlist(self, user_id):
         update_query = DBUser.update(playlist_head=None).where(DBUser.discord_id == user_id)
         delete_query = DBSongLink.delete().where(DBSongLink.user == user_id)

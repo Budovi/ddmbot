@@ -395,6 +395,17 @@ class CommandHandler:
         await self._bot.whisper('**Song** [{}] {} **was added to your playlist.** If this is not correct, you can '
                                 'remove it by using the *pop* command.'.format(song_id, song_title))
 
+    _delete_help = 'Deletes all occurrences of the specified song from your playlist\n\nSong ID can be located ' \
+                   'before the song name in the square brackets. It is included in the status message and all the ' \
+                   'listings.'
+
+    @privileged(False)
+    @dec.command(pass_context=True, ignore_extra=False, help=_delete_help)
+    async def delete(self, ctx, song_id: int):
+        count = await self._database.delete_from_playlist(int(ctx.message.author.id), song_id)
+        await self._bot.whisper('**{} occurrence(s) of the song [{}] were removed from your playlist**'
+                                .format(count, song_id))
+
     _clear_help = 'Clears your playlist\n\nAll songs will be removed from your playlist.'
 
     @privileged(False)
