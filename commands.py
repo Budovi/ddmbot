@@ -450,13 +450,12 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been blacklisted'.format(which))
 
-    _unblacklist_help = '* Removes a song specified by it\'s ID from the blacklist\n\nSong ID can be located before ' \
-                        'the song name in the square brackets. It is included in the status message and all the ' \
-                        'listings.'
+    _permit_help = '* Removes a song specified by it\'s ID from the blacklist\n\nSong ID can be located before the ' \
+                   'song name in the square brackets. It is included in the status message and all the listings.'
 
     @privileged(True)
-    @dec.command(ignore_extra=False, help=_unblacklist_help)
-    async def unblacklist(self, which: int):
+    @dec.command(ignore_extra=False, help=_permit_help)
+    async def permit(self, which: int):
         try:
             await self._database.permit_song(which)
         except ValueError as e:
