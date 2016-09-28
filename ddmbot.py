@@ -10,8 +10,9 @@ import discord
 import discord.ext.commands as dec
 
 import commands
-import player as pl
 import dbmanager
+import helpformatter
+import player as pl
 import streamserver
 import usermanager
 
@@ -182,7 +183,8 @@ if __name__ == '__main__':
                 os.mkfifo(config['player']['pcm_pipe'], mode=0o600)
 
             # create bot instance and register event hooks
-            ddmbot = dec.Bot(command_prefix=config['commands']['delimiter'], pm_help=True)
+            ddmbot = dec.Bot(command_prefix=config['commands']['delimiter'], pm_help=True,
+                             formatter=helpformatter.DdmBotHelpFormatter())
             ddmbot.event(on_ready)
             ddmbot.event(on_message)
             ddmbot.event(on_error)

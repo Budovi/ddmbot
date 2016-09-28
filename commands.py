@@ -143,7 +143,7 @@ class CommandHandler:
     #
     # General bot commands
     #
-    _restart_help = '*Operators only* Restarts the bot\n\nThe configuration is reloaded from the configuration file.'
+    _restart_help = '* Restarts the bot\n\nThe configuration is reloaded from the configuration file.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_restart_help)
@@ -152,8 +152,7 @@ class CommandHandler:
         self._restart_scheduled = True
         self._bot.loop.create_task(self._shutdown())
 
-    _shutdown_help = '*Operators only* Shuts down the bot\n\nYou need an access to the server bot runs on to launch ' \
-                     'it again.'
+    _shutdown_help = '* Shuts down the bot\n\nYou need an access to the server bot runs on to launch it again.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_shutdown_help)
@@ -161,8 +160,8 @@ class CommandHandler:
         await self._message('Shutting down...')
         self._bot.loop.create_task(self._shutdown())
 
-    _ignore_help = '*Operators only* Adds the user specified into the list of ignored users\n\nThe user may be ' \
-                   'specified by it\'s username, nick or mention.'
+    _ignore_help = '* Adds the user specified into the list of ignored users\n\nThe user may be specified by it\'s ' \
+                   'username, nick or mention.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_ignore_help)
@@ -173,8 +172,8 @@ class CommandHandler:
         await self._database.ignore_user(int(member.id))
         await self._message('User {} has been added to the ignore list'.format(member))
 
-    _unignore_help = '*Operators only* Removes the user specified from the list of ignored users\n\nThe user may be ' \
-                     'specified by it\'s username, nick or mention.'
+    _unignore_help = '* Removes the user specified from the list of ignored users\n\nThe user may be specified by ' \
+                     'it\'s username, nick or mention.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_unignore_help)
@@ -185,32 +184,32 @@ class CommandHandler:
     #
     # Player controls
     #
-    _stop_help = '*Operators only* Changes the player\'s mode to STOPPED'
+    _stop_help = '* Changes the player\'s mode to STOPPED'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_stop_help)
     async def stop(self):
         await self._player.set_stop()
 
-    _djmode_help = '*Operators only* Changes the player\'s mode to DJ MODE\n\nIn this mode, users can join the DJ ' \
-                   'queue and take turns in playing songs from their playlists.'
+    _djmode_help = '* Changes the player\'s mode to DJ MODE\n\nIn this mode, users can join the DJ queue and take ' \
+                   'turns in playing songs from their playlists.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_djmode_help)
     async def djmode(self):
         await self._player.set_djmode()
 
-    _stream_help = '*Operators only* Changes the player\'s state to STREAMING\n\nStream specified by the URL is ' \
-                   'played. If the playback fails or the stream ends, bot will change it\'s state to STOPPED.\n' \
-                   'No blacklisting, overplay protection or length limits are applied when using this command.'
+    _stream_help = '* Changes the player\'s state to STREAMING\n\nStream specified by the URL is played. If the ' \
+                   'playback fails or the stream ends, bot will change it\'s state to STOPPED.\nNo blacklisting, ' \
+                   'overplay protection or length limits are applied when using this command.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_stream_help)
     async def stream(self, url: str, name=None):
         await self._player.set_stream(url, name)
 
-    _volume_help = '*Operators only* Queries or changes the volume of the bot in the voice channel\n\nDirect ' \
-                   'stream is unaffected by this command. Valid values are between 0 and 200 [%].'
+    _volume_help = '* Queries or changes the volume of the bot in the voice channel\n\nDirect stream is unaffected ' \
+                   'by this command. Valid values are between 0 and 200 [%].'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_volume_help)
@@ -224,8 +223,8 @@ class CommandHandler:
     #
     # User controls
     #
-    _join_help = 'Adds you to the DJ queue\n\nYou must be listening to do this. When you stop listening, you ' \
-                 'will be removed from the queue automatically.'
+    _join_help = 'Adds you to the DJ queue\n\nYou must be listening to do this. When you stop listening, you will be ' \
+                 'removed from the queue automatically.'
 
     @privileged(False)
     @dec.command(pass_context=True, ignore_extra=False, help=_join_help)
@@ -268,8 +267,8 @@ class CommandHandler:
         else:
             await self._bot.whisper('Valid options for a rotate command are \'on\' and \'off\'')
 
-    _kick_help = '*Operators only* Kicks the specified user from the DJ queue\n\nThe user may be specified by it\'s ' \
-                 'username, nick or mention.'
+    _kick_help = '* Kicks the specified user from the DJ queue\n\nThe user may be specified by it\'s username, nick ' \
+                 'or mention.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_kick_help)
@@ -315,8 +314,8 @@ class CommandHandler:
         playlist, direct = await self._users.generate_urls(int(ctx.message.author.id))
         await self._bot.whisper(self._direct_stream_message.format(playlist, direct))
 
-    _forceskip_help = '*Operators only* Skips the song currently playing or terminates the stream\n\nPlease note ' \
-                      'that the song *won\'t* be blacklisted automatically.'
+    _forceskip_help = '* Skips the song currently playing or terminates the stream\n\nPlease note that the song ' \
+                      '*won\'t* be blacklisted automatically.'
 
     @privileged(True)
     @dec.command(pass_context=True, ignore_extra=False, help=_forceskip_help)
@@ -436,10 +435,10 @@ class CommandHandler:
     #
     # Song management
     #
-    _blacklist_help = '*Operators only* Puts a song specified by it\'s ID to the blacklist\n\nSong ID can be ' \
-                      'located before the song name in the square brackets. It is included in the status message ' \
-                      'and all the listings.\nThis does not prevent inserting the song to the user\'s playlist, ' \
-                      'song is skipped when it is about to be played.'
+    _blacklist_help = '* Puts a song specified by it\'s ID to the blacklist\n\nSong ID can be located before the ' \
+                      'song name in the square brackets. It is included in the status message and all the listings.' \
+                      '\nThis does not prevent inserting the song to the user\'s playlist, song is skipped when it ' \
+                      'is about to be played.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_blacklist_help)
@@ -450,9 +449,9 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been blacklisted'.format(which))
 
-    _unblacklist_help = '*Operators only* Removes a song specified by it\'s ID from the blacklist\n\nSong ID can be ' \
-                        'located before the song name in the square brackets. It is included in the status message ' \
-                        'and all the listings.'
+    _unblacklist_help = '* Removes a song specified by it\'s ID from the blacklist\n\nSong ID can be located before ' \
+                        'the song name in the square brackets. It is included in the status message and all the ' \
+                        'listings.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_unblacklist_help)
@@ -463,11 +462,11 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been removed from blacklist'.format(which))
 
-    _deduplicate_help = '*Operators only* Marks a song to be a duplicate of another song\n\nThis is a destructive ' \
-                        'operation. The duplicate is replaced by it\'s "original" just before playing. Tests for ' \
-                        'the blacklist, length and overplay protection are performed on the "original" song.\n' \
-                        'Song IDs can be located before the song name in the square brackets. You can also use the ' \
-                        ' *search* command to obtain the ID.'
+    _deduplicate_help = '* Marks a song to be a duplicate of another song\n\nThis is a destructive operation. The ' \
+                        'duplicate is replaced by it\'s "original" just before playing. Tests for the blacklist, ' \
+                        'length and overplay protection are performed on the "original" song.\nSong IDs can be ' \
+                        'located before the song name in the square brackets. You can also use the *search* command ' \
+                        'to obtain the ID.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_deduplicate_help)
@@ -478,8 +477,8 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as a duplicate of the song [{}]'.format(which, target))
 
-    _split_help = '*Operators only* Marks a given song as an original\n\nThis command can be used to revert some ' \
-                  'of the changes done by the *deduplicate* command.'
+    _split_help = '* Marks a given song as an original\n\nThis command can be used to revert some of the changes ' \
+                  'done by the *deduplicate* command.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_split_help)
@@ -490,10 +489,10 @@ class CommandHandler:
             raise dec.UserInputError(str(e))
         await self._message('Song [{}] has been marked as unique'.format(which))
 
-    _rename_help = '*Operators only* Changes the title of a specified song\n\nThis command does not update the ' \
-                   'status message. Please note that you should put the name in the quotes if it contains spaces. ' \
-                   'New name will be used next time the song is played.\nSong ID can be located before the song ' \
-                   'name in the square brackets. It is included in the status message and all the listings.'
+    _rename_help = '* Changes the title of a specified song\n\nThis command does not update the status message. ' \
+                   'Please note that you should put the name in the quotes if it contains spaces. New name will be ' \
+                   'used next time the song is played.\nSong ID can be located before the song name in the square ' \
+                   'brackets. It is included in the status message and all the listings.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_rename_help)
@@ -560,10 +559,10 @@ class CommandHandler:
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
 
-    _clear_failed_help = '*Operators only* Clears flags indicating that song has failed to download\n\nSongs marked ' \
-                         'as a duplicate are not affected.\nBy doing this, the songs won\'t be excluded from the ' \
-                         'automatic playlist anymore. You can use this command to fix the database after a service ' \
-                         'outage. Optionally, you can specify a song ID to remove individual songs from the list.'
+    _clear_failed_help = '* Clears flags indicating that song has failed to download\n\nSongs marked as a duplicate ' \
+                         'are not affected.\nBy doing this, the songs won\'t be excluded from the automatic playlist ' \
+                         'anymore. You can use this command to fix the database after a service outage. Optionally, ' \
+                         'you can specify a song ID to remove individual songs from the list.'
 
     @privileged(True)
     @dec.command(ignore_extra=False, help=_clear_failed_help)
