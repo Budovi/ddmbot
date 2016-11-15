@@ -56,7 +56,7 @@ class User:
         await self._db.ignore(int(user.id))
         await self._bot.message('User {} has been added to the ignore list'.format(user))
 
-    @user.command(pass_context=True, ignore_extra=False, help=_help_messages['info'])
+    @user.command(pass_context=True, ignore_extra=False, aliases=['i'], help=_help_messages['info'])
     async def info(self, ctx, user: discord.User = None):
         info = await self._db.info(int(user.id if user is not None else ctx.message.author.id))
 
