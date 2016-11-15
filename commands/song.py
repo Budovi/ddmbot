@@ -151,9 +151,9 @@ class Song:
                 '    **Listener count:** {total_listener_count} ({listener_count})\n' \
                 '    **Skip vote count:** {total_skip_vote_count} ({skip_vote_count})\n' \
                 '    **Duration:** {duration}s\n' \
-                '    **Credits remaining:** {credits_remaining}\n\n' \
-                '    **Blacklisted:** {blacklisted}\n' \
-                '    **Has failed to download:** {failed}\n\n' \
+                '    **Credits remaining:** {credit_count}\n\n' \
+                '    **Blacklisted:** {is_blacklisted}\n' \
+                '    **Has failed to download:** {has_failed}\n\n' \
                 '    **Marked as a duplicate of:** {duplicates}\n' \
                 '    **Is duplicated by:** {duplicated_by}'.format_map(info)
         await self._bot.whisper(reply)
