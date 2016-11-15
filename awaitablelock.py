@@ -4,7 +4,7 @@ import functools
 
 
 class AwaitableLock:
-    def __init__(self, loop=None):
+    def __init__(self, *, loop=None):
         self._loop = loop if loop is not None else asyncio.get_event_loop()
         self._main_lock = threading.Lock()
 

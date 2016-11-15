@@ -36,7 +36,8 @@ class ListenerInfo:
 
 
 class UserManager:
-    def __init__(self, config, bot, aac_server):
+    def __init__(self, bot):
+        config = bot.config['ddmbot']
         self._config_ds_token_timeout = datetime.timedelta(seconds=int(config['ds_token_timeout']))
         self._config_ds_notify_time = datetime.timedelta(seconds=int(config['ds_notify_time']))
         self._config_ds_remove_time = datetime.timedelta(seconds=int(config['ds_remove_time']))
@@ -44,7 +45,6 @@ class UserManager:
         self._config_dj_remove_time = datetime.timedelta(seconds=int(config['dj_remove_time']))
 
         self._bot = bot
-        self._aac_server = aac_server
 
         self._lock = asyncio.Lock(loop=bot.loop)
 
@@ -52,28 +52,13 @@ class UserManager:
         self._listeners = dict()  # maps discord_id (int) -> ListenerInfo
         self._queue = collections.deque()
 
-        self._player = None
-        self._timeout_task = None
-
-    #
-    # Resource management wrappers
-    #
-    def init(self, player):
-        self._player = player
-        self._timeout_task = self._bot.loop.create_task(self._check_timeouts())
-
-    async def cleanup(self):
-        if self._timeout_task is not None:
-            self._timeout_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._timeout_task
-
     #
     # API for displaying information
     #
-    async def get_state(self):
+    async def get_display_info(self):
         async with self._lock:
-            return set(self._listeners.keys()), list(self._queue)
+            direct_listeners = {key for key, value in self._listeners.items() if value.is_direct}
+            return len(self._listeners), direct_listeners, list(self._queue)
 
     def is_listening(self, discord_id):
         return discord_id in self._listeners
@@ -89,8 +74,7 @@ class UserManager:
                 return None
             timestamp, user = self._tokens[token]
             # only one connection is possible at the time
-            if user in self._listeners and not self._listeners[user].is_direct \
-                    and not hasattr(self._bot, 'direct_channel'):
+            if user in self._listeners and not self._listeners[user].is_direct and self._bot.direct is None:
                 log.debug('Token {} is valid for user {}, but the user is connected using discord'.format(token, user))
                 return None
             log.debug('Token {} verification passed, associated user: {}'.format(token, user))
@@ -99,8 +83,8 @@ class UserManager:
     #
     # API for the player
     #
-    def someone_listening(self):
-        return bool(self._listeners)
+    def get_current_listeners(self):
+        return set(self._listeners.keys())
 
     async def get_next_dj(self):
         async with self._lock:
@@ -125,19 +109,19 @@ class UserManager:
                 if info.is_direct and not direct:
                     # someone using a direct stream connected to the voice channel
                     log.debug('Switching user {} from direct stream to discord channel'.format(discord_id))
-                    self._bot.loop.create_task(self._aac_server.disconnect(discord_id))
+                    self._bot.loop.create_task(self._bot.stream.disconnect(discord_id))
                 elif not info.is_direct and direct:
                     # some connected to a voice channel switched to the direct stream
-                    if not hasattr(self._bot, 'direct_channel'):
+                    if self._bot.direct is None:
                         log.error('User {} has connected to the direct stream while using voice channel, but this '
                                   'should not be possible in the current setup'.format(discord_id))
                         return
                     log.debug('Switching user {} from discord channel to direct stream'.format(discord_id))
-                    member = discord.utils.get(self._bot.voice_channel.server.members, id=str(discord_id))
+                    member = discord.utils.get(self._bot.server.members, id=str(discord_id))
                     if member is None:
                         log.error('Cannot move user {} -- it\'s not a recognized server member'.format(discord_id))
                     else:
-                        self._bot.loop.create_task(self._bot.move_member(member, self._bot.direct_channel))
+                        self._bot.loop.create_task(self._bot.client.move_member(member, self._bot.direct))
                 elif not info.is_direct and not direct:
                     # something fishy is going on...
                     log.error('Tried to add user {} with the discord channel connection twice'.format(discord_id))
@@ -147,7 +131,7 @@ class UserManager:
             # now add the user to the listeners, rewriting previous entry if present
             self._listeners[discord_id] = ListenerInfo(direct=direct)
 
-            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 
     async def remove_listener(self, discord_id, *, direct):
         async with self._lock:
@@ -163,28 +147,28 @@ class UserManager:
             # remove the user from the listeners
             self._listeners.pop(discord_id)
 
-            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 
     async def join_queue(self, discord_id):
         async with self._lock:
             if discord_id not in self._listeners:
-                raise ValueError('User is not listening')
+                raise ValueError('You have to be listening to join the DJ queue')
             if discord_id in self._queue:
                 return
             self._queue.append(discord_id)
 
-            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 
     async def leave_queue(self, discord_id):
         async with self._lock:
             try:
                 self._queue.remove(discord_id)
             except ValueError:
-                raise ValueError('User is not in queue')
+                raise ValueError('You are not in the DJ queue')
 
-            self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 
-    async def generate_urls(self, discord_id):
+    async def generate_token(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
         current_time = datetime.datetime.now()
         token = ''.join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(64))
@@ -192,7 +176,7 @@ class UserManager:
             # key collisions are possible, but should be negligible
             log.debug('Added token {} for user {}'.format(token, discord_id))
             self._tokens[token] = (current_time, discord_id)
-            return self._aac_server.playlist_url_format.format(token), self._aac_server.stream_url_format.format(token)
+            return token
 
     #
     # API for activity update
@@ -207,13 +191,9 @@ class UserManager:
     # Internal timeout checking task
     #
     def _whisper(self, user_id, message):
-        user = discord.utils.get(self._bot.get_all_members(), id=str(user_id))
-        if user is None:
-            log.error('Cannot whisper user {} -- it\'s not a recognized server member'.format(user_id))
-            return
-        self._bot.loop.create_task(self._bot.send_message(user, message))
+        self._bot.loop.create_task(self._bot.whisper_id(user_id, message))
 
-    async def _check_timeouts(self):
+    async def task_check_timeouts(self):
         while True:
             await asyncio.sleep(20, loop=self._bot.loop)
             current_time = datetime.datetime.now()
@@ -262,11 +242,12 @@ class UserManager:
                     self._queue.remove(dj)
                 for listener in remove_listeners:
                     log.info('Listener {} has timed out'.format(listener))
-                    self._bot.loop.create_task(self._aac_server.disconnect(listener))
+                    self._bot.loop.create_task(self._bot.stream.disconnect(listener))
                     with suppress(ValueError):
                         self._queue.remove(listener)
                     self._listeners.pop(listener)
 
             # now update the player
             if remove_listeners or remove_djs:
-                self._bot.loop.create_task(self._player.users_changed(bool(self._listeners), bool(self._queue)))
+                self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                          bool(self._queue)))

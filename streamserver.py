@@ -38,7 +38,7 @@ class AacProcessor(threading.Thread):
 
     def flush(self):
         try:
-            os.read(self._pipe_fd, 1048576)
+            os.read(self._pipe_fd, 1048576)  # TODO: change the magic constant
         except OSError as e:
             if e.errno != errno.EAGAIN:
                 raise
@@ -121,77 +121,72 @@ class ConnectionInfo:
 
 
 class StreamServer:
-    def __init__(self, config, loop):
-        self._config = config
-        self._config_bitrate = int(config['bitrate'])
-        self._frame_len = int(config['block_size'])
-        self._loop = loop
+    def __init__(self, bot):
+        self._bot = bot
+        self._config = bot.config['stream_server']
+        self._config_bitrate = int(self._config['bitrate'])
+        self._frame_len = int(self._config['block_size'])
 
-        self._users = None
         self._app = None
         self._server = None
         self._handler = None
 
-        self._lock = awaitablelock.AwaitableLock(loop=loop)
+        self._lock = awaitablelock.AwaitableLock(loop=bot.loop)
         # user -> ConnectionInfo
         self._connections = dict()
 
+        ffmpeg_command = 'ffmpeg -loglevel error -y -f s16le -ar {} -ac {} -i {} -f adts -c:a {} -b:a {}k {}' \
+            .format(bot.voice.encoder.sampling_rate, bot.voice.encoder.channels, shlex.quote(self._config['int_pipe']),
+                    self._config['aac_encoder'], self._config_bitrate, shlex.quote(self._config['aac_pipe']))
+
         self._aac_thread = None
         self._cleanup_task = None
-        self._internal_pipe = os.open(config['int_pipe'], os.O_RDONLY | os.O_NONBLOCK)
+        self._internal_pipe = os.open(self._config['int_pipe'], os.O_RDONLY | os.O_NONBLOCK)
         self._ffmpeg = None
-        self._ffmpeg_args = None
+        self._ffmpeg_args = shlex.split(ffmpeg_command)
         self._connected = threading.Event()
 
         self._current_frame = b''
         self._meta_changed = False
         self._current_meta = b'\0'
 
-        # response headers and payload assembly
+        # URLs, response headers and payload assembly
+        # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
+        self._playlist_url = 'http://{hostname}:{port}{playlist_path}?token={{}}'.format_map(self._config)
+        self._stream_url = 'http://{hostname}:{port}{stream_path}?token={{}}'.format_map(self._config)
         self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot streaming server', 'Content-type':
                                            'audio/mpegurl'}
-        self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{}\r\nhttp://{}:{}{}?{{}}'\
-            .format(config['name'], config['hostname'], config['port'], config['stream_path'])
+        self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{name}\r\nhttp://{hostname}:{port}{stream_path}?{{}}' \
+            .format_map(self._config)
         self._stream_response_headers = {'Cache-Control': 'no-cache', 'Connection': 'close', 'Pragma': 'no-cache',
                                          'Server': 'DdmBot streaming server', 'Content-Type': 'audio/aac',
-                                         'Icy-BR': config['bitrate'], 'Icy-Pub': '0'}
+                                         'Icy-BR': self._config['bitrate'], 'Icy-Pub': '0'}
 
         for icy_name, config_name in (('Icy-Name', 'name'), ('Icy-Description', 'description'), ('Icy-Genre', 'genre'),
                                       ('Icy-Url', 'url')):
-            if config_name in config and config[config_name]:
-                self._stream_response_headers[icy_name] = config[config_name]
+            if config_name in self._config and self._config[config_name]:
+                self._stream_response_headers[icy_name] = self._config[config_name]
 
     @property
-    def playlist_url_format(self):
-        # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
-        return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
-                                                  self._config['playlist_path'])
+    def playlist_url(self):
+        return self._playlist_url
 
     @property
-    def stream_url_format(self):
-        # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
-        return 'http://{}:{}{}?token={{}}'.format(self._config['hostname'], self._config['port'],
-                                                  self._config['stream_path'])
+    def stream_url(self):
+        return self._stream_url
 
     #
     # Resource management wrappers
     #
-    async def init(self, users, bot_voice):
-        self._users = users
-        ffmpeg_command = 'ffmpeg -loglevel error -y -f s16le -ar {} -ac {} -i {}' \
-                         ' -f adts -c:a {} -b:a {}k {}' \
-            .format(bot_voice.encoder.sampling_rate, bot_voice.encoder.channels, shlex.quote(self._config['int_pipe']),
-                    self._config['aac_encoder'], self._config_bitrate, shlex.quote(self._config['aac_pipe']))
-        self._ffmpeg_args = shlex.split(ffmpeg_command)
-
+    async def init(self):
         # http server initialization
-        self._app = web.Application(loop=self._loop)
+        self._app = web.Application(loop=self._bot.loop)
         self._app.router.add_route('GET', self._config['stream_path'], self._handle_new_stream)
         self._app.router.add_route('GET', self._config['playlist_path'], self._handle_new_playlist)
         self._handler = self._app.make_handler()
 
-        self._server = await self._loop.create_server(self._handler, self._config['ip_address'],
-                                                      int(self._config['port']))
+        self._server = await self._bot.loop.create_server(self._handler, self._config['ip_address'],
+                                                          int(self._config['port']))
 
     async def cleanup(self):
         if self._server is not None:
@@ -213,13 +208,8 @@ class StreamServer:
     #
     # Player interface
     #
-    @property
-    def internal_pipe_path(self):
-        return self._config['int_pipe']
-
-    @property
-    def connected(self):
-        return self._connected
+    def is_connected(self):
+        return self._connected.is_set()
 
     async def set_meta(self, stream_title):
         # assemble metadata
@@ -259,7 +249,7 @@ class StreamServer:
     async def _handle_new_stream(self, request):
         # check for the token validity
         token = request.query_string[6:]
-        user = await self._users.get_token_owner(token)
+        user = await self._bot.users.get_token_owner(token)
         if not request.query_string.startswith('token=') or user is None:
             response = web.Response(status=403)
             response.force_close()
@@ -278,7 +268,7 @@ class StreamServer:
         response = web.StreamResponse(headers=response_headers)
         await response.prepare(request)
         # construct ConnectionInfo object
-        connection = ConnectionInfo(response, meta, self._loop)
+        connection = ConnectionInfo(response, meta, self._bot.loop)
         await connection.prepare()
 
         # critical section -- we are manipulating the connections
@@ -287,7 +277,7 @@ class StreamServer:
                 # first listener needs to initialize everything
                 log.debug('First listener initialization')
                 # spawn cleanup task
-                self._cleanup_task = self._loop.create_task(self._cleanup_loop())
+                self._cleanup_task = self._bot.loop.create_task(self._cleanup_loop())
                 # spawn ffmpeg process
                 try:
                     self._ffmpeg = subprocess.Popen(self._ffmpeg_args)
@@ -312,7 +302,7 @@ class StreamServer:
 
         # notify the UserManager that a new listener was added
         # race condition is possible, but only one of the connections will be served
-        await self._users.add_listener(user, direct=True)
+        await self._bot.users.add_listener(user, direct=True)
 
         # wait before terminating
         log.debug('Waiting for the client termination')
@@ -379,7 +369,7 @@ class StreamServer:
     async def _cleanup_loop(self):
         while True:
             # sleep for small amount of time
-            await asyncio.sleep(1, loop=self._loop)
+            await asyncio.sleep(1, loop=self._bot.loop)
 
             # keep the list of disconnected listeners
             disconnected = list()
@@ -388,7 +378,7 @@ class StreamServer:
                 # iterate over all connections
                 for user, connection in self._connections.items():
                     try:
-                        await asyncio.wait_for(connection.response.drain(), 0.001, loop=self._loop)
+                        await asyncio.wait_for(connection.response.drain(), 0.001, loop=self._bot.loop)
                     except (errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
                         log.debug('Connection broke with {}'.format(user))
                         disconnected.append(user)
@@ -400,7 +390,7 @@ class StreamServer:
                 for user in disconnected:
                     self._connections.pop(user)
                     try:
-                        await self._users.remove_listener(user, direct=True)
+                        await self._bot.users.remove_listener(user, direct=True)
                     except ValueError:
                         log.warning('Connection broke with {}, but the user was not listening'.format(user))
 
