@@ -29,14 +29,14 @@ class Playlist:
         'list songs from the specified playlist at positions 17 to 36).',
 
         'peek': 'Lists the songs in your active playlist\n\n'
-        'Quick way of listing your active playlist. Equivalent to *playlist list <active_playlist_name> [offset]*.',
+        'Quick way of listing your active playlist. Equivalent to \'playlist list <active_playlist_name> [start]\'.',
 
         'remove': 'Removes the specified playlist\n\n'
         'Playlist is removed along with all the songs in it. This cannot be undone.',
 
         'repeat': 'Set repeat behaviour for the specified playlist\n\n'
         'You can switch between removing and repeating songs from your active playlist after playing. The current '
-        'setting can be queried with *playlist list* command, every playlist can be configured separately.\n'
+        'setting can be queried with \'playlist list\' command, every playlist can be configured separately.\n'
         'When turned on, songs are simply reinserted at the end of the active playlist after being played.',
 
         'switch': 'Changes your active playlist\n\n'

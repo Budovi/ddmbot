@@ -27,7 +27,7 @@ class Song:
         '(blacklist, length, overplay) are performed on the "original" song.\nThis function is useful for replacing '
         'songs with a bad quality and is necessary for overplay protection to work correctly.\nSong IDs can be located '
         'in the square brackets just before the title. It is included in the status message and all the listings. You '
-        'can also use *search* command to obtain the IDs.',
+        'can also use \'search\' command to obtain the IDs.',
 
         'delete': 'Deletes all occurrences of the specified song from your active playlist\n\n'
         'Song ID can be located in the square brackets just before the title. It is included in the status message and '
@@ -40,9 +40,9 @@ class Song:
         'failed_list': 'Lists all the songs that have failed to download\n\n'
         'Up to 20 songs are returned. Songs marked as a duplicate are considered resolved and are excluded from the '
         'list. Songs are automatically removed from this list after a successful download, or manually by using '
-        '*clear* subcommand.\n\nSongs that are marked as failed to download are excluded from the automatic playlist. '
-        'Bot operators are expected to investigate download issues and provide an alternative source for the songs '
-        'if necessary.',
+        '\'clear\' subcommand.\n\nSongs that are marked as failed to download are excluded from the automatic '
+        'playlist. Bot operators are expected to investigate download issues and provide an alternative source for '
+        'the songs if necessary.',
 
         'info': 'Displays information about the song stored in the database\n\n'
         'Mainly for debugging purposes, as an aid for the bot operators.',
@@ -69,8 +69,8 @@ class Song:
 
         'split': '* Marks a given song as an original\n\n'
         'This command can be used to fix duplication status of the song. After this command is issued, the song '
-        'specified won\'t be marked as a duplicate anymore.\nThis is the inverse command to the *deduplicate*. '
-        'Just like the *deduplicate*, this command does not manipulate with timestamps nor credit counts.\nSong ID '
+        'specified won\'t be marked as a duplicate anymore.\nThis is the inverse command to the \'deduplicate\'. '
+        'Just like the \'deduplicate\', this command does not manipulate with timestamps nor credit counts.\nSong ID '
         'can be located in the square brackets just before the song title. It is included in the status message and '
         'all the listings.'
     }

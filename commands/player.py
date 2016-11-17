@@ -24,12 +24,12 @@ class Player:
         'After issuing this command, bot plays the specified stream. Such stream has no record in database, it is not '
         'included in the automatic playlist and cannot be skipped. Stream title is either extracted from the stream '
         'or can be provided as an optional argument.\nNo further checks are done for the stream length, overplaying '
-        'nor the blacklist. To stop the stream an operator can use *player stop* command or transition into *djmode* '
-        'directly. After the stream ends (or fails), player will transition into stopped state.',
+        'nor the blacklist. To stop the stream an operator can use \'player stop\' command or transition into '
+        '\'djmode\' directly. After the stream ends (or fails), player will transition into stopped state.',
 
         'title': '* Sets a stream title to the value specified\n\n'
         'This command can be used to set a different title for the currently played stream. Status message is '
-        're-printed upon completion. Can be only used in the stream mode, use *song rename* feature to change titles '
+        're-printed upon completion. Can be only used in the stream mode, use \'song rename\' feature to change titles '
         'of the songs in the database.',
 
         'volume': '* Queries or sets a volume for the discord voice channel\n\n'
