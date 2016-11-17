@@ -1,7 +1,5 @@
 import discord.ext.commands as dec
 
-from commands.common import *
-
 
 class Others:
     """Commands that don't fit anywhere else"""
@@ -23,9 +21,6 @@ class Others:
         'direct': 'Requests a link to the direct audio stream\n\n'
         'Instructions are sent along with the link.',
 
-        'hype': 'Cancels a skip vote\n\n'
-        'You can use this command to take back the skip vote you issued earlier.',
-
         'join': 'Adds you to the DJ queue\n\n'
         'You must be listening to do this. When you stop listening, you will be removed from the queue automatically.',
 
@@ -37,31 +32,22 @@ class Others:
         'is skipped instantly.\nOperators can force the skip by supplying `force` as an argument to this command. '
         'Please note that this does not automatically blacklist the skipped song.',
 
-        'restart': '* Restarts the bot\n\n'
-        'Operators may use this command to put bot back into a valid state. It is useful when bot is acting weird or '
-        'unstable and should not be needed. If you find a bug, please report it using the project\'s issue tracker.',
-
-        'shutdown': '* Tries to cleanly shut down the bot\n\n'
-        'Please note that you\'ll need an access to the server to re-launch the bot. Good for doing a maintenance, '
-        'for example updating the bot or changing bot\'s configuration.'
+        'unskip': 'Cancels a skip vote\n\n'
+        'You can use this command to take back the skip vote you issued earlier.'
     }
 
-    @dec.command(pass_context=True, ignore_extra=False, help=_help_messages['direct'])
+    @dec.command(pass_context=True, ignore_extra=False, aliases=['d'], help=_help_messages['direct'])
     async def direct(self, ctx):
         token = await self._bot.users.generate_token(int(ctx.message.author.id))
         await self._bot.whisper(self._direct_stream_message.format(token, token))
 
-    @dec.command(pass_context=True, ignore_extra=False, help=_help_messages['hype'])
-    async def hype(self, ctx):
-        await self._bot.player.skip_unvote(int(ctx.message.author.id))
-
-    @dec.command(pass_context=True, ignore_extra=False, help=_help_messages['join'])
+    @dec.command(pass_context=True, ignore_extra=False, aliases=['j'], help=_help_messages['join'])
     async def join(self, ctx):
         if self._bot.player.streaming or self._bot.player.stopped:
             raise dec.UserInputError('Player is not in the DJ mode')
         await self._bot.users.join_queue(int(ctx.message.author.id))
 
-    @dec.command(pass_context=True, ignore_extra=False, help=_help_messages['leave'])
+    @dec.command(pass_context=True, ignore_extra=False, aliases=['l'], help=_help_messages['leave'])
     async def leave(self, ctx):
         await self._bot.users.leave_queue(int(ctx.message.author.id))
 
@@ -83,14 +69,6 @@ class Others:
         await self._bot.player.skip_vote(int(ctx.message.author.id))
         await self._bot.log('User {} has voted to skip'.format(ctx.message.author))
 
-    @privileged
-    @dec.command(ignore_extra=False, help=_help_messages['restart'])
-    async def restart(self):
-        await self._bot.message('Restarting...')
-        self._bot.loop.create_task(self._bot.restart())
-
-    @privileged
-    @dec.command(ignore_extra=False, help=_help_messages['shutdown'])
-    async def shutdown(self):
-        await self._bot.message('Shutting down...')
-        self._bot.loop.create_task(self._bot.shutdown())
+    @dec.command(pass_context=True, ignore_extra=False, help=_help_messages['unskip'])
+    async def unskip(self, ctx):
+        await self._bot.player.skip_unvote(int(ctx.message.author.id))

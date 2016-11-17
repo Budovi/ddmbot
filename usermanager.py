@@ -168,6 +168,22 @@ class UserManager:
 
             self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 
+    async def move_listener(self, discord_id, position):
+        if position < 1:
+            raise ValueError('Position must be positive')
+        async with self._lock:
+            if discord_id not in self._listeners:
+                raise ValueError('User must be listening to join the DJ queue')
+
+            inserted = True
+            with suppress(ValueError):
+                self._queue.remove(discord_id)
+                inserted = False
+            self._queue.insert(position - 1, discord_id)
+
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            return inserted, min(len(self._queue), position)
+
     async def generate_token(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
         current_time = datetime.datetime.now()

@@ -183,7 +183,7 @@ class DBPlaylistUtil:
             try:
                 created = False
                 playlist = Playlist.select(Playlist).join(User, on=(User.active_playlist == Playlist.id)) \
-                        .where(User.id == user_id).get()
+                    .where(User.id == user_id).get()
             except Playlist.DoesNotExist:
                 if create_default and Playlist.select().where(Playlist.user == user_id).count() == 0:
                     playlist = Playlist.create(user=user_id, name='default', repeat=False)

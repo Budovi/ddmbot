@@ -14,12 +14,19 @@ class Playlist:
 
         'active': 'Displays the name of your active playlist\n\n',
 
+        'append': 'Inserts the specified songs into your active playlist\n\n'
+        'Youtube, Soundcloud and Bandcamp services are supported (incl. playlists). You can specify multiple URLs or '
+        'song IDs in the command arguments. Songs are inserted *at the end* of your active playlist.',
+
         'create': 'Creates new playlist with a given name\n\n'
         'The default behaviour is to repeat the songs from the playlist in a loop.',
 
         'clear': 'Clears the specified playlist\n\n'
         'All songs from the given playlist will be removed. This cannot be undone.\nIf no playlist is specified, your '
         'active playlist is cleared.',
+
+        'delete': 'Removes the specified playlist\n\n'
+        'Playlist is removed along with all the songs in it. This cannot be undone.',
 
         'list': 'Lists the available playlists or songs in them\n\n'
         'When executed without arguments, list of your playlist is be returned. If you specify a playlist, list of '
@@ -31,8 +38,16 @@ class Playlist:
         'peek': 'Lists the songs in your active playlist\n\n'
         'Quick way of listing your active playlist. Equivalent to \'playlist list <active_playlist_name> [start]\'.',
 
-        'remove': 'Removes the specified playlist\n\n'
-        'Playlist is removed along with all the songs in it. This cannot be undone.',
+        'pop': 'Removes specified number of songs from the head of your active playlist\n\n'
+        'If number is not specified, a single song is removed. Songs are removed *from the beginning* of the playlist.',
+
+        'popid': 'Deletes all occurrences of the specified song from your active playlist\n\n'
+        'Song ID can be located in the square brackets just before the title. It is included in the status message and '
+        'all the listings.',
+
+        'prepend': 'Inserts the specified songs into your active playlist\n\n'
+        'Youtube, Soundcloud and Bandcamp services are supported (incl. playlists). You can specify multiple URLs or '
+        'song IDs in the command arguments. Songs are inserted *at the beginning* of your active playlist.',
 
         'repeat': 'Set repeat behaviour for the specified playlist\n\n'
         'You can switch between removing and repeating songs from your active playlist after playing. The current '
@@ -59,6 +74,24 @@ class Playlist:
         name = await self._db.get_active(int(ctx.message.author.id))
         await self._bot.whisper('**Active playlist:** {}'.format(name))
 
+    @playlist.command(pass_context=True, ignore_extra=False, aliases=['as'], help=_help_messages['append'])
+    async def append(self, ctx, *uris: str):
+        # print the disclaimer
+        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
+                                'result. You can run other commands, but **avoid manipulating your playlists**.')
+        # now do the operation
+        result = await self._db.append(int(ctx.message.author.id), uris)
+        reply = '**{} song(s) appended**\n**{} insertions failed**' \
+            .format(result['inserted'], len(result['error_list']))
+        if result['created_playlist']:
+            reply += '\nSince you hadn\'t had any playlists, a "default" playlist was created for you automatically. '
+            'Please note that the playlist is set to remove songs after playing.'
+        if result['truncated']:
+            reply += '\n__**Part of the input was omitted due to song count restrictions.**__'
+        if result['error_list']:
+            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(result['error_list'][:10])
+        await self._bot.whisper(reply)
+
     @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['create'])
     async def create(self, ctx, playlist_name: str):
         await self._db.create(int(ctx.message.author.id), playlist_name)
@@ -69,6 +102,11 @@ class Playlist:
     async def clear(self, ctx, playlist_name: str = None):
         playlist_name = await self._db.clear(int(ctx.message.author.id), playlist_name)
         await self._bot.whisper('**Playlist** {} **was cleared**'.format(playlist_name))
+
+    @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['delete'])
+    async def delete(self, ctx, playlist_name: str):
+        await self._db.delete(int(ctx.message.author.id), playlist_name)
+        await self._bot.whisper('**Playlist** {} **was removed**'.format(playlist_name))
 
     @playlist.command(pass_context=True, ignore_extra=False, aliases=['l'], help=_help_messages['list'])
     async def list(self, ctx, playlist_name: str = None, start: int = 1):
@@ -91,10 +129,38 @@ class Playlist:
     async def peek(self, ctx, start: int = 1):
         await self._show(int(ctx.message.author.id), start=start)
 
-    @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['remove'])
-    async def remove(self, ctx, playlist_name: str):
-        await self._db.remove(int(ctx.message.author.id), playlist_name)
-        await self._bot.whisper('**Playlist** {} **was removed**'.format(playlist_name))
+    @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['pop'])
+    async def pop(self, ctx, count: int = 1):
+        real_count = await self._db.pop(int(ctx.message.author.id), count)
+
+        reply = '**{} song(s) removed from your playlist**'.format(real_count)
+        if real_count < count:
+            reply += '\n{} song(s) could not be removed because your playlist is empty.'.format(count - real_count)
+        await self._bot.whisper(reply)
+
+    @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['popid'])
+    async def popid(self, ctx, song_id: int):
+        count = await self._db.pop_id(int(ctx.message.author.id), song_id)
+        await self._bot.whisper('**{} occurrence(s) of the song [{}] were removed from your playlist**'
+                                .format(count, song_id))
+
+    @playlist.command(pass_context=True, ignore_extra=False, aliases=['ps'], help=_help_messages['prepend'])
+    async def prepend(self, ctx, *uris: str):
+        # print the disclaimer
+        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
+                                'result. You can run other commands, but **avoid manipulating your playlists**.')
+        # now do the operation
+        result = await self._db.append(int(ctx.message.author.id), uris)
+        reply = '**{} song(s) prepended**\n**{} insertions failed**' \
+            .format(result['inserted'], len(result['error_list']))
+        if result['created_playlist']:
+            reply += '\nSince you hadn\'t had any playlists, a "default" playlist was created for you automatically. '
+            'Please note that the playlist is set to remove songs after playing.'
+        if result['truncated']:
+            reply += '\n__**Part of the input was omitted due to song count restrictions.**__'
+        if result['error_list']:
+            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(result['error_list'][:10])
+        await self._bot.whisper(reply)
 
     @playlist.command(pass_context=True, ignore_extra=False, help=_help_messages['repeat'])
     async def repeat(self, ctx, playlist_name: str, repeat_policy: str):

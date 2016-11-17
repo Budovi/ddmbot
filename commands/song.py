@@ -8,14 +8,10 @@ class Song:
     """Song insertion, querying and manipulation"""
     def __init__(self, bot):
         self._bot = bot
-        self._db = database.song.SongInterface(bot.loop, bot.config['ddmbot'])
+        self._db = database.song.SongInterface(bot.loop)
 
     _help_messages = {
-        'group': 'Adding and removing songs, song information and manipulation',
-
-        'append': 'Inserts the specified songs into your active playlist\n\n'
-        'Youtube, Soundcloud and Bandcamp services are supported (incl. playlists). You can specify multiple URLs or '
-        'song IDs in the command arguments. Songs are inserted *at the end* of your active playlist.',
+        'group': 'Song information, querying and manipulation',
 
         'blacklist': '* Puts the specified song to the blacklist\n\n'
         'Song ID can be located in the square brackets just before the title. It is included in the status message '
@@ -28,10 +24,6 @@ class Song:
         'songs with a bad quality and is necessary for overplay protection to work correctly.\nSong IDs can be located '
         'in the square brackets just before the title. It is included in the status message and all the listings. You '
         'can also use \'search\' command to obtain the IDs.',
-
-        'delete': 'Deletes all occurrences of the specified song from your active playlist\n\n'
-        'Song ID can be located in the square brackets just before the title. It is included in the status message and '
-        'all the listings.',
 
         'failed_clear': '* Removes the songs from the failed list\n\n'
         'Songs marked as duplicates are not affected. Individual songs can be removed by specifying their ID. You can '
@@ -50,13 +42,6 @@ class Song:
         'permit': '* Removes the specified song from the blacklist\n\n'
         'Song ID can be located in the square brackets just before the title. It is included in the status message '
         'and all the listings.',
-
-        'pop': 'Removes specified number of songs from the head of your active playlist\n\n'
-        'If number is not specified, a single song is removed. Songs are removed *from the beginning* of the playlist.',
-
-        'prepend': 'Inserts the specified songs into your active playlist\n\n'
-        'Youtube, Soundcloud and Bandcamp services are supported (incl. playlists). You can specify multiple URLs or '
-        'song IDs in the command arguments. Songs are inserted *at the beginning* of your active playlist.',
 
         'rename': '* Changes the title of a specified song\n\n'
         'This command can be used to rename the song stored in the database. It does not update the status message; '
@@ -81,24 +66,6 @@ class Song:
                                  'the available subcommands.'
                                  .format(subcommand, self._bot.config['ddmbot']['delimiter']))
 
-    @song.command(pass_context=True, ignore_extra=False, aliases=['a'], help=_help_messages['append'])
-    async def append(self, ctx, *uris: str):
-        # print the disclaimer
-        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
-                                'result. You can run other commands, but **avoid manipulating your playlists**.')
-        # now do the operation
-        result = await self._db.append(int(ctx.message.author.id), uris)
-        reply = '**{} song(s) appended**\n**{} insertions failed**' \
-            .format(result['inserted'], len(result['error_list']))
-        if result['created_playlist']:
-            reply += '\nSince you hadn\'t had any playlists, a "default" playlist was created for you automatically. '
-            'Please note that the playlist is set to remove songs after playing.'
-        if result['truncated']:
-            reply += '\n__**Part of the input was omitted due to song count restrictions.**__'
-        if result['error_list']:
-            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(result['error_list'][:10])
-        await self._bot.whisper(reply)
-
     @privileged
     @song.command(ignore_extra=False, help=_help_messages['blacklist'])
     async def blacklist(self, song_id: int):
@@ -110,12 +77,6 @@ class Song:
     async def deduplicate(self, which_id: int, target_id: int):
         await self._db.merge(which_id, target_id)
         await self._bot.message('Song [{}] has been marked as a duplicate of the song [{}]'.format(which_id, target_id))
-
-    @song.command(pass_context=True, ignore_extra=False, help=_help_messages['delete'])
-    async def delete(self, ctx, song_id: int):
-        count = await self._db.delete(int(ctx.message.author.id), song_id)
-        await self._bot.whisper('**{} occurrence(s) of the song [{}] were removed from your playlist**'
-                                .format(count, song_id))
 
     @song.group(ignore_extra=False, invoke_without_command=True)
     async def failed(self):
@@ -158,33 +119,6 @@ class Song:
     async def permit(self, song_id: int):
         await self._db.permit(song_id)
         await self._bot.message('Song [{}] has been removed from blacklist'.format(song_id))
-
-    @song.command(pass_context=True, ignore_extra=False, help=_help_messages['pop'])
-    async def pop(self, ctx, count: int = 1):
-        real_count = await self._db.pop(int(ctx.message.author.id), count)
-
-        reply = '**{} song(s) removed from your playlist**'.format(real_count)
-        if real_count < count:
-            reply += '\n{} song(s) could not be removed because your playlist is empty.'.format(count - real_count)
-        await self._bot.whisper(reply)
-
-    @song.command(pass_context=True, ignore_extra=False, aliases=['p'], help=_help_messages['prepend'])
-    async def prepend(self, ctx, *uris: str):
-        # print the disclaimer
-        await self._bot.whisper('Please note that inserting new songs can take a while. Be patient and wait for the '
-                                'result. You can run other commands, but **avoid manipulating your playlists**.')
-        # now do the operation
-        result = await self._db.append(int(ctx.message.author.id), uris)
-        reply = '**{} song(s) prepended**\n**{} insertions failed**' \
-            .format(result['inserted'], len(result['error_list']))
-        if result['created_playlist']:
-            reply += '\nSince you hadn\'t had any playlists, a "default" playlist was created for you automatically. '
-            'Please note that the playlist is set to remove songs after playing.'
-        if result['truncated']:
-            reply += '\n__**Part of the input was omitted due to song count restrictions.**__'
-        if result['error_list']:
-            reply += '\n\nSome of the errors follow:\n > ' + '\n > '.join(result['error_list'][:10])
-        await self._bot.whisper(reply)
 
     @privileged
     @song.command(ignore_extra=False, help=_help_messages['rename'])

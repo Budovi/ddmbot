@@ -1,9 +1,9 @@
 import discord.ext.commands as dec
 import discord
 
+from commands.bot import Bot
 from commands.common import log
 from commands.others import Others
-from commands.player import Player
 from commands.playlist import Playlist
 from commands.song import Song
 from commands.user import User
@@ -19,8 +19,8 @@ class CommandHandler:
     def __init__(self, bot):
         self._bot = bot
 
+        self._bot_cog = Bot(bot)
         self._others_cog = Others(bot)
-        self._player_cog = Player(bot)
         self._playlist_cog = Playlist(bot)
         self._song_cog = Song(bot)
         self._user_cog = User(bot)
@@ -29,8 +29,8 @@ class CommandHandler:
         bot.client.add_listener(self._on_command_error, 'on_command_error')
         bot.client.add_listener(self._on_command_completion, 'on_command_completion')
 
+        bot.client.add_cog(self._bot_cog)
         bot.client.add_cog(self._others_cog)
-        bot.client.add_cog(self._player_cog)
         bot.client.add_cog(self._playlist_cog)
         bot.client.add_cog(self._song_cog)
         bot.client.add_cog(self._user_cog)

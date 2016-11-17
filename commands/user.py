@@ -6,7 +6,7 @@ from commands.common import *
 
 
 class User:
-    """User blacklisting and querying information"""
+    """User blacklisting, moving, and querying information"""
     def __init__(self, bot):
         self._bot = bot
         self._db = database.user.UserInterface(bot.loop)
@@ -23,6 +23,10 @@ class User:
         'disconnecting the user from the direct stream except restarting the bot.',
 
         'info': 'Displays information about the user stored in the database\n\n'
+        'User may be specified by it\'s username, nick or mention.',
+
+        'move': '* Moves the specified user onto the specified position in queue\n\n'
+        'User must be listening to do this. If the user is present in the DJ queue already, it is removed beforehand. '
         'User may be specified by it\'s username, nick or mention.',
 
         'kick': '* Kicks the specified user from the DJ queue\n\n'
@@ -64,7 +68,25 @@ class User:
         await self._bot.whisper(reply)
 
     @privileged
-    @user.command(ignore_extra=False, help=_help_messages['kick'])
+    @user.command(ignore_extra=False, aliases=['m'], help=_help_messages['move'])
+    async def move(self, user: discord.User, position: int):
+        if self._bot.player.streaming or self._bot.player.stopped:
+            raise dec.UserInputError('Player is not in the DJ mode')
+
+        inserted, position = await self._bot.users.move_listener(int(user.id), position)
+        if inserted:
+            await self._bot.message('User {} was added to the DJ queue to the {} position'
+                                    .format(user, self._ordinal(position)))
+        else:
+            await self._bot.message('User {} was moved to the {} position in the DJ queue'
+                                    .format(user, self._ordinal(position)))
+
+    @privileged
+    @user.command(ignore_extra=False, aliases=['k'], help=_help_messages['kick'])
     async def kick(self, user: discord.Member):
         await self._bot.users.leave_queue(int(user.id))
         await self._bot.message('User {} was removed from the DJ queue'.format(user))
+
+    @staticmethod
+    def _ordinal(n):
+        return "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
