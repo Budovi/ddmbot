@@ -31,15 +31,10 @@ class User:
     }
 
     @dec.group(invoke_without_command=True, aliases=['u'], help=_help_messages['group'])
-    async def user(self, *stray: str):
-        if stray:
-            await self._bot.whisper('Command *user* has no subcommand named {}. Please use `{}help user` to list all '
-                                    'the available subcommands.'
-                                    .format(stray[0], self._bot.config['ddmbot']['delimiter']))
-        else:
-            await self._bot.whisper('You need to provide a subcommand to the *user* command. Please use `{}help user` '
-                                    'to list all the available subcommands.'
-                                    .format(self._bot.config['ddmbot']['delimiter']))
+    async def user(self, subcommand: str, *arguments: str):
+        raise dec.UserInputError('Command *user* has no subcommand named {}. Please use `{}help user` to list all '
+                                 'the available subcommands.'
+                                 .format(subcommand, self._bot.config['ddmbot']['delimiter']))
 
     @privileged
     @user.command(ignore_extra=False, help=_help_messages['grace'])

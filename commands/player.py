@@ -37,15 +37,10 @@ class Player:
     }
 
     @dec.group(invoke_without_command=True, help=_help_messages['group'])
-    async def player(self, *stray: str):
-        if stray:
-            await self._bot.whisper('Command *player* has no subcommand named {}. Please use `{}help player` to list '
-                                    'all the available subcommands.'
-                                    .format(stray[0], self._bot.config['ddmbot']['delimiter']))
-        else:
-            await self._bot.whisper('You need to provide a subcommand to the *player* command. Please use `{}help '
-                                    'player` to list all the available subcommands.'
-                                    .format(self._bot.config['ddmbot']['delimiter']))
+    async def player(self, subcommand: str, *arguments: str):
+        raise dec.UserInputError('Command *player* has no subcommand named {}. Please use `{}help player` to list '
+                                 'all the available subcommands.'
+                                 .format(subcommand, self._bot.config['ddmbot']['delimiter']))
 
     @privileged
     @player.command(ignore_extra=False, help=_help_messages['djmode'])

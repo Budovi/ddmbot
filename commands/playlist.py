@@ -49,15 +49,10 @@ class Playlist:
     }
 
     @dec.group(invoke_without_command=True, aliases=['p'], help=_help_messages['group'])
-    async def playlist(self, *stray: str):
-        if stray:
-            await self._bot.whisper('Command *playlist* has no subcommand named {}. Please use `{}help playlist` to '
-                                    'list all the available subcommands.'
-                                    .format(stray[0], self._bot.config['ddmbot']['delimiter']))
-        else:
-            await self._bot.whisper('You need to provide a subcommand to the *playlist* command. Please use `{}help '
-                                    'playlist` to list all the available subcommands.'
-                                    .format(self._bot.config['ddmbot']['delimiter']))
+    async def playlist(self, subcommand: str, *arguments: str):
+        raise dec.UserInputError('Command *playlist* has no subcommand named {}. Please use `{}help playlist` to '
+                                 'list all the available subcommands.'
+                                 .format(subcommand, self._bot.config['ddmbot']['delimiter']))
 
     @playlist.command(pass_context=True, ignore_extra=False, aliases=['a'], help=_help_messages['active'])
     async def active(self, ctx):

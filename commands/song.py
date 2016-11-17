@@ -76,15 +76,10 @@ class Song:
     }
 
     @dec.group(invoke_without_command=True, aliases=['s'], help=_help_messages['group'])
-    async def song(self, *stray: str):
-        if stray:
-            await self._bot.whisper('Command *song* has no subcommand named {}. Please use `{}help song` to list all '
-                                    'the available subcommands.'
-                                    .format(stray[0], self._bot.config['ddmbot']['delimiter']))
-        else:
-            await self._bot.whisper('You need to provide a subcommand to the *song* command. Please use `{}help song` '
-                                    'to list all the available subcommands.'
-                                    .format(self._bot.config['ddmbot']['delimiter']))
+    async def song(self, subcommand: str, *arguments: str):
+        raise dec.UserInputError('Command *song* has no subcommand named {}. Please use `{}help song` to list all '
+                                 'the available subcommands.'
+                                 .format(subcommand, self._bot.config['ddmbot']['delimiter']))
 
     @song.command(pass_context=True, ignore_extra=False, aliases=['a'], help=_help_messages['append'])
     async def append(self, ctx, *uris: str):
