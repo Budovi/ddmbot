@@ -4,7 +4,7 @@ from commands.common import *
 
 
 class Bot:
-    """Bot controls"""
+    """Bot controls (player modes, status, title, volume)"""
     def __init__(self, bot):
         self._bot = bot
 

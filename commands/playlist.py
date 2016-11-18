@@ -4,7 +4,7 @@ import database.playlist
 
 
 class Playlist:
-    """Playlist manipulation"""
+    """Playlist manipulation, switching, listing playlists and their content"""
     def __init__(self, bot):
         self._bot = bot
         self._db = database.playlist.PlaylistInterface(bot.loop, bot.config['ddmbot'])

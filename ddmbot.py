@@ -15,6 +15,7 @@ import discord.ext.commands as dec
 import commandhandler
 import database.bot
 import database.common
+import helpformatter
 import player
 import streamserver
 import usermanager
@@ -78,6 +79,7 @@ class DdmBot:
         self._voice_lock = asyncio.Lock(loop=self._loop)
         self._initialized = asyncio.Event(loop=self._loop)
         self._client = dec.Bot(loop=self._loop, command_prefix=self._config['ddmbot']['delimiter'],
+                               formatter=helpformatter.DdmBotHelpFormatter(),
                                help_attrs={'hidden': True, 'aliases': ['h']}, pm_help=True)
 
         # register event listeners

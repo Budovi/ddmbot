@@ -12,7 +12,7 @@ class User:
         self._db = database.user.UserInterface(bot.loop)
 
     _help_messages = {
-        'group': 'User blacklisting and information',
+        'group': 'User blacklisting, moving, and querying information',
 
         'grace': '* Removes the specified user from ignore list\n\n'
         'User may be specified by it\'s username, nick or mention.',
