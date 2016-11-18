@@ -172,6 +172,7 @@ class DdmBot:
         async with self._init_lock:
             if self._initialized.is_set():
                 log.info('DdmBot connection to discord was restored')
+                self._loop.create_task(self.connect_voice())
                 return
 
             log.info('DdmBot connected as {0} (ID: {0.id})'.format(self._client.user))
@@ -265,6 +266,7 @@ class DdmBot:
             tmp = await self._client.join_voice_channel(self._voice_channel)
             tmp.encoder_options(sample_rate=_VOICE_BITRATE, channels=_VOICE_CHANNELS)
             self._voice_client = tmp  # TODO: atomicity provided by GIL
+            log.info('Voice channel connection succeeded')
 
     async def wait_for_initialization(self):
         await self._initialized.wait()
