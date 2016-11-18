@@ -213,7 +213,6 @@ class UserManager:
         while True:
             await asyncio.sleep(20, loop=self._bot.loop)
             current_time = datetime.datetime.now()
-            log.debug('Starting inactivity check')
             # sets used to store users and tokens to remove
             remove_tokens = set()
             remove_djs = set()
