@@ -72,20 +72,17 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
         else:
             playlist = self._get_playlist(user_id, playlist_name)
 
-        result = list()
         with self._database.atomic():
             total = Link.select().where(Link.playlist == playlist.id).count()
-            current_link_id = playlist.head_id
-            for index in range(limit + offset):
-                if current_link_id is None:
-                    break
-                link = Link.select(Link.next, Song.id, Song.title).join(Song).where(Link.id == current_link_id) \
-                    .tuples().get()
-                if index >= offset:
-                    result.append(link[1:])
-                current_link_id = link[0]
+            query = Song.raw('WITH RECURSIVE cte (id, title, next) AS ('
+                             'SELECT song.id, song.title, link.next_id FROM song JOIN link ON song.id == link.song_id '
+                             '  WHERE link.id == ? '
+                             'UNION ALL '
+                             'SELECT song.id, song.title, link.next_id FROM cte, song JOIN link '
+                             '  ON song.id == link.song_id WHERE link.id == cte.next) '
+                             'SELECT id, title FROM cte LIMIT ? OFFSET ?;', playlist.head_id, limit, offset)
 
-        return result, playlist.name, total
+        return list(query.tuples()), playlist.name, total
 
     @in_executor
     def shuffle(self, user_id, playlist_name=None):

@@ -196,6 +196,8 @@ class Playlist:
         return "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (n % 10 < 4) * n % 10::4])
 
     async def _show(self, user_id, *, playlist_name=None, start=1):
+        if start <= 0:
+            raise dec.UserInputError('Start must be a positive number')
         # offset is start -1
         items, playlist_name, total = await self._db.show(user_id, start-1, 20, playlist_name)
 
@@ -207,7 +209,7 @@ class Playlist:
                                         .format(playlist_name, self._ordinal(start)))
             return
 
-        reply = '**{} songs (out of {}) from playlist** {}**, starting from the **{}**:**\n **>** ' \
+        reply = '**{} song(s) (out of {}) from playlist** {}**, starting from the **{}**:**\n **>** ' \
                 .format(len(items), total, playlist_name, self._ordinal(start)) + \
                 '\n **>** '.join(['[{}] {}'.format(*item) for item in items])
         await self._bot.whisper(reply)
