@@ -7,7 +7,7 @@ import os
 import time
 from contextlib import suppress
 from logging.handlers import TimedRotatingFileHandler
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import InvalidState
 
 import discord
 import discord.ext.commands as dec
@@ -152,7 +152,7 @@ class DdmBot:
             pending = asyncio.Task.all_tasks()
             for task in pending:
                 task.cancel()
-                with suppress(asyncio.CancelledError, ConnectionClosed, ConnectionError, asyncio.TimeoutError):
+                with suppress(asyncio.CancelledError, ConnectionError, InvalidState, asyncio.TimeoutError):
                     self._loop.run_until_complete(task)
 
             self._loop.close()
