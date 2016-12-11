@@ -177,8 +177,8 @@ class DBPlaylistUtil:
     def _get_playlist(user_id, playlist_name):
         try:
             playlist = Playlist.select().where(Playlist.user == user_id, Playlist.name == playlist_name).get()
-        except Playlist.DoesNotExist:
-            raise KeyError('You don\'t have a playlist called {}'.format(playlist_name))
+        except Playlist.DoesNotExist as e:
+            raise KeyError('You don\'t have a playlist called {}'.format(playlist_name)) from e
         return playlist
 
     @staticmethod
@@ -193,13 +193,13 @@ class DBPlaylistUtil:
             try:
                 playlist = Playlist.select(Playlist).join(User, on=(User.active_playlist == Playlist.id)) \
                     .where(User.id == user_id).get()
-            except Playlist.DoesNotExist:
+            except Playlist.DoesNotExist as e:
                 if create_default and Playlist.select().where(Playlist.user == user_id).count() == 0:
                     playlist = Playlist.create(user=user_id, name='default', repeat=False)
                     User.update(active_playlist=playlist.id).where(User.id == user_id).execute()
                     created = True
                 else:
-                    raise LookupError('You don\'t have an active playlist')
+                    raise LookupError('You don\'t have an active playlist') from e
 
             return playlist, created
 

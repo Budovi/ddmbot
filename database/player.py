@@ -89,8 +89,8 @@ class PlayerInterface(DBInterface, DBSongUtil):
             try:
                 playlist = Playlist.select(Playlist.id, Playlist.head, Playlist.repeat) \
                     .join(User, on=(User.active_playlist == Playlist.id)).where(User.id == user_id).get()
-            except Playlist.DoesNotExist:
-                raise LookupError('You don\'t have an active playlist')
+            except Playlist.DoesNotExist as e:
+                raise LookupError('You don\'t have an active playlist') from e
 
             if playlist.head is None:
                 raise LookupError('Your playlist is empty')
@@ -134,12 +134,12 @@ class PlayerInterface(DBInterface, DBSongUtil):
         # fetch the URL using youtube_dl
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+        except youtube_dl.DownloadError as e:  # blacklist the song and raise an exception
             if not song.has_failed:
                 log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
                 Song.update(has_failed=True).where(Song.id == song.id).execute()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
-                                       song_title=song.title)
+                                       song_title=song.title) from e
 
         # there is a chance song was marked as failed before but it no longer applies, fix the flag
         if song.has_failed:
@@ -170,11 +170,11 @@ class PlayerInterface(DBInterface, DBSongUtil):
 
         try:
             result = self._ytdl.extract_info(self._make_url(song.uuri), download=False)
-        except youtube_dl.DownloadError:  # blacklist the song and raise an exception
+        except youtube_dl.DownloadError as e:  # blacklist the song and raise an exception
             log.warning('Download of the song [{}] failed'.format(song.id), exc_info=True)
             Song.update(has_failed=True).where(Song.id == song.id).execute()
             raise UnavailableSongError('Download of the song [{}] failed'.format(song.id), song_id=song.id,
-                                       song_title=song.title)
+                                       song_title=song.title) from e
         return SongContext(None, song.id, song.title, song.duration, result['url'])
 
     @in_executor

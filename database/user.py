@@ -7,8 +7,8 @@ class UserInterface(DBInterface):
         # interesting info: play count, number of playlists, number of songs and if user is blacklisted
         try:
             user = User.get(id=user_id)
-        except User.DoesNotExist:
-            raise ValueError('Specified user {} is not in the database')
+        except User.DoesNotExist as e:
+            raise ValueError('Specified user {} is not in the database') from e
 
         with self._database.atomic():
             playlist_count = Playlist.select().where(Playlist.user == user_id).count()

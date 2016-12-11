@@ -163,8 +163,8 @@ class UserManager:
         async with self._lock:
             try:
                 self._queue.remove(discord_id)
-            except ValueError:
-                raise ValueError('You are not in the DJ queue')
+            except ValueError as e:
+                raise ValueError('You are not in the DJ queue') from e
 
             self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
 

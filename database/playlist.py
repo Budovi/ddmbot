@@ -26,12 +26,12 @@ class SongUriProcessor(DBSongUtil):
             result = self._ytdl.extract_info(self._make_url(song_uuri), download=False, process=False)
             try:
                 title = result['title']
-            except KeyError:
-                raise RuntimeError('Failed to extract song title')
+            except KeyError as e:
+                raise RuntimeError('Failed to extract song title') from e
             try:
                 duration = int(result['duration'])
-            except (KeyError, ValueError):
-                raise RuntimeError('Failed to extract song duration')
+            except (KeyError, ValueError) as e:
+                raise RuntimeError('Failed to extract song duration') from e
             song, created = Song.create_or_get(uuri=song_uuri, title=title,
                                                last_played=datetime.utcfromtimestamp(0),
                                                duration=duration, credit_count=self._credit_cap)
@@ -96,8 +96,8 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
         try:
             playlist = Playlist.select(Playlist).join(User, on=(User.active_playlist == Playlist.id)) \
                 .where(User.id == user_id).get()
-        except Playlist.DoesNotExist:
-            raise LookupError('You don\'t have an active playlist')
+        except Playlist.DoesNotExist as e:
+            raise LookupError('You don\'t have an active playlist') from e
         return playlist.name
 
     @in_executor
@@ -121,8 +121,8 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             # if it's ok, create new playlist, integrity error means a playlist with the same name already exists
             try:
                 Playlist.create(user=user_id, name=playlist_name)
-            except Playlist.IntegrityError:
-                raise ValueError('You already have a playlist with the chosen name'.format(playlist_name))
+            except Playlist.IntegrityError as e:
+                raise ValueError('You already have a playlist with the chosen name'.format(playlist_name)) from e
 
     @in_executor
     def clear(self, user_id, playlist_name):
@@ -271,8 +271,8 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             # find the target link
             try:
                 target_link = Link.get(Link.playlist == playlist.id, Link.song == song_id)
-            except Link.DoesNotExist:
-                raise LookupError('Specified song was not found in your playlist')
+            except Link.DoesNotExist as e:
+                raise LookupError('Specified song was not found in your playlist') from e
 
             # find the previous link to break up the chain
             try:

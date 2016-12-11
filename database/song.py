@@ -34,8 +34,8 @@ class SongInterface(DBInterface, DBSongUtil):
     def get_info(self, song_id):
         try:
             result = Song.select().where(Song.id == song_id).dicts().get()
-        except Song.DoesNotExist:
-            raise ValueError('Song [{}] cannot be found in the database'.format(song_id))
+        except Song.DoesNotExist as e:
+            raise ValueError('Song [{}] cannot be found in the database'.format(song_id)) from e
         # put url instead of unique uri into the result dictionary
         result['url'] = self._make_url(result.pop('uuri'))
         # remove duplicated_id
@@ -73,8 +73,8 @@ class SongInterface(DBInterface, DBSongUtil):
             with self._database.atomic():
                 try:
                     target_song = Song.get(Song.id == target_id)
-                except Song.DoesNotExist:
-                    raise ValueError('Song [{}] cannot be found in the database'.format(target_id))
+                except Song.DoesNotExist as e:
+                    raise ValueError('Song [{}] cannot be found in the database'.format(target_id)) from e
 
                 if target_song.duplicate_id == source_id:
                     # we're "reassigning" the duplicate flags

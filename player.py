@@ -319,8 +319,8 @@ class Player:
                 raise RuntimeError('You haven\'t voted to skip')
             try:
                 self._song_context.skip_unvote(user_id)
-            except KeyError:
-                raise RuntimeError('You haven\'t voted to skip')
+            except KeyError as e:
+                raise RuntimeError('You haven\'t voted to skip') from e
             await self._update_status()
 
     @property
