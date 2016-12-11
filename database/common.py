@@ -80,6 +80,10 @@ class Link(DdmBotSchema):
     song = peewee.ForeignKeyField(Song)
     next = peewee.ForeignKeyField('self', null=True)
 
+    class Meta:
+        # single song copy per playlist; check for not broken playlist
+        constraints = [peewee.SQL('UNIQUE(playlist_id, song_id)'), peewee.SQL('UNIQUE(playlist_id, next_id)')]
+
 DeferredLink.set_model(Link)
 
 
@@ -178,10 +182,15 @@ class DBPlaylistUtil:
         return playlist
 
     @staticmethod
-    def _get_active_playlist(user_id, *, create_default=False):
+    def _get_playlist_ex(user_id, *, playlist_name=None, create_default=False):
+        created = False
+        # if the name is given, we can get the playlist in a typical way
+        if playlist_name is not None:
+            return DBPlaylistUtil._get_playlist(user_id, playlist_name), created
+
+        # else we're gonna try to get an active playlist and possibly create it
         with _database.atomic():
             try:
-                created = False
                 playlist = Playlist.select(Playlist).join(User, on=(User.active_playlist == Playlist.id)) \
                     .where(User.id == user_id).get()
             except Playlist.DoesNotExist:

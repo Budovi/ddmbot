@@ -1,11 +1,82 @@
 import random
+from collections import deque
 from datetime import datetime
-
 
 from database.common import *
 
 
-class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
+class SongUriProcessor(DBSongUtil):
+    def __init__(self, credit_cap, uris, *, reverse=False):
+        self._credit_cap = credit_cap
+        self._uris = deque(uris)
+        self._reverse = reverse
+
+    def __iter__(self):
+        return self
+
+    def _get_song(self, song_url):
+        song_uuri = self._make_uuri(song_url)
+        if not song_uuri:
+            raise ValueError('Malformed URL or unsupported service')
+        # potentially the first query of the song
+        try:
+            song = Song.get(Song.uuri == song_uuri)
+        except Song.DoesNotExist:
+            # we need to create a new record, youtube_dl is necessary to obtain a title and a song length
+            result = self._ytdl.extract_info(self._make_url(song_uuri), download=False, process=False)
+            try:
+                title = result['title']
+            except KeyError:
+                raise RuntimeError('Failed to extract song title')
+            try:
+                duration = int(result['duration'])
+            except (KeyError, ValueError):
+                raise RuntimeError('Failed to extract song duration')
+            song, created = Song.create_or_get(uuri=song_uuri, title=title,
+                                               last_played=datetime.utcfromtimestamp(0),
+                                               duration=duration, credit_count=self._credit_cap)
+        return song
+
+    def __next__(self):
+        # get a new item
+        try:
+            uri = self._uris.pop() if self._reverse else self._uris.popleft()
+        except IndexError as e:
+            raise StopIteration from e
+        # check if song id
+        if uri.isdigit():
+            try:
+                return Song.get(id=int(uri))
+            except Song.DoesNotExist as e:
+                raise RuntimeError('Song [{}] cannot be found in the database'.format(uri)) from e
+        # it can be a list otherwise
+        if self._is_list(uri):
+            try:
+                result = self._ytdl.extract_info(uri, download=False)
+                if 'entries' not in result:
+                    raise RuntimeError('Malformed URL or unsupported service')
+                # create a new uri list from the results
+                if result['extractor'] == 'youtube:playlist':
+                    list_uris = [self._url_base['yt'].format(entry['id']) for entry in result['entries']]
+                else:
+                    list_uris = [entry['url'] for entry in result['entries']]
+                # put back most of them and keep the first one
+                if self._reverse:
+                    self._uris.extend(list_uris[:-1])
+                    uri = list_uris[-1]
+                else:
+                    self._uris.extendleft(list_uris[:0:-1])
+                    uri = list_uris[0]
+            except Exception as e:
+                raise RuntimeError('Processing `{}` failed: {}'.format(uri, str(e))) from e
+        # now we have a single song, hopefully at least
+        try:
+            return self._get_song(uri)
+        except Exception as e:
+            raise RuntimeError('Processing `{}` failed: {}'.format(uri, str(e))) from e
+
+
+class PlaylistInterface(DBInterface, DBPlaylistUtil):
     def __init__(self, loop, config):
         self._config_max_playlists = int(config['playlist_count_limit'])
         self._config_max_songs = int(config['song_count_limit'])
@@ -13,8 +84,20 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
         DBInterface.__init__(self, loop)
 
     @in_executor
+    def exists(self, user_id, playlist_name):
+        try:
+            self._get_playlist(user_id, playlist_name)
+        except KeyError:
+            return False
+        return True
+
+    @in_executor
     def get_active(self, user_id):
-        playlist, created = self._get_active_playlist(user_id)
+        try:
+            playlist = Playlist.select(Playlist).join(User, on=(User.active_playlist == Playlist.id)) \
+                .where(User.id == user_id).get()
+        except Playlist.DoesNotExist:
+            raise LookupError('You don\'t have an active playlist')
         return playlist.name
 
     @in_executor
@@ -37,23 +120,17 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
                 raise RuntimeError('You\'ve reached the maximum number of playlists allowed')
             # if it's ok, create new playlist, integrity error means a playlist with the same name already exists
             try:
-                playlist = Playlist.create(user=user_id, name=playlist_name)
+                Playlist.create(user=user_id, name=playlist_name)
             except Playlist.IntegrityError:
                 raise ValueError('You already have a playlist with the chosen name'.format(playlist_name))
-            User.update(active_playlist=playlist.id).where(User.id == user_id).execute()
 
     @in_executor
-    def clear(self, user_id, playlist_name=None):
-        if playlist_name is None:
-            playlist, created = self._get_active_playlist(user_id)
-        else:
-            playlist = self._get_playlist(user_id, playlist_name)
-
-        update_query = Playlist.update(head=None).where(Playlist.id == playlist.id)
-        delete_query = Link.delete().where(Link.playlist == playlist.id)
+    def clear(self, user_id, playlist_name):
         with self._database.atomic():
-            update_query.execute()
-            delete_query.execute()
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
+
+            Playlist.update(head=None).where(Playlist.id == playlist.id).execute()
+            Link.delete().where(Link.playlist == playlist.id).execute()
 
         return playlist.name
 
@@ -61,18 +138,15 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
     def list(self, user_id):
         query = Playlist.select(Playlist.name, peewee.fn.COUNT(Link.id).alias('song_count'), Playlist.repeat) \
             .join(Link, join_type=peewee.JOIN_LEFT_OUTER, on=(Link.playlist == Playlist.id)) \
-            .where(Playlist.user == user_id).group_by(Playlist.name).dicts()
+            .where(Playlist.user == user_id).group_by(Playlist.name)
 
-        return list(query)
+        return list(query.dicts())
 
     @in_executor
-    def show(self, user_id, offset, limit, playlist_name=None):
-        if playlist_name is None:
-            playlist, created = self._get_active_playlist(user_id)
-        else:
-            playlist = self._get_playlist(user_id, playlist_name)
-
+    def show(self, user_id, offset, limit, playlist_name):
         with self._database.atomic():
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
+
             total = Link.select().where(Link.playlist == playlist.id).count()
             query = Song.raw('WITH RECURSIVE cte (id, title, next) AS ('
                              'SELECT song.id, song.title, link.next_id FROM song JOIN link ON song.id == link.song_id '
@@ -81,20 +155,17 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
                              'SELECT song.id, song.title, link.next_id FROM cte, song JOIN link '
                              '  ON song.id == link.song_id WHERE link.id == cte.next) '
                              'SELECT id, title FROM cte LIMIT ? OFFSET ?;', playlist.head_id, limit, offset)
+            songs = list(query.tuples())
 
-        return list(query.tuples()), playlist.name, total
+        return songs, playlist.name, total
 
     @in_executor
-    def shuffle(self, user_id, playlist_name=None):
-        if playlist_name is None:
-            playlist, created = self._get_active_playlist(user_id)
-        else:
-            playlist = self._get_playlist(user_id, playlist_name)
-
-        query = Link.select().where(Link.playlist == playlist.id)
-        song_list = list()
-
+    def shuffle(self, user_id, playlist_name):
         with self._database.atomic():
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
+            query = Link.select().where(Link.playlist == playlist.id)
+            song_list = list()
+
             for item in query:
                 song_list.append(item.song_id)
             random.shuffle(song_list)
@@ -105,133 +176,78 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
         return playlist.name
 
     @in_executor
-    def switch(self, user_id, playlist_name):
+    def delete(self, user_id, playlist_name):
         with self._database.atomic():
-            playlist = self._get_playlist(user_id, playlist_name)
-            User.update(active_playlist=playlist.id).where(User.id == user_id).execute()
-
-    @in_executor
-    def delete(self, user_id, playlist_name=None):
-        if playlist_name is None:
-            playlist, created = self._get_active_playlist(user_id)
-        else:
-            playlist = self._get_playlist(user_id, playlist_name)
-
-        update_query = User.update(active_playlist=None).where(User.id == user_id, User.active_playlist == playlist.id)
-        link_delete_query = Link.delete().where(Link.playlist == playlist.id)
-        with self._database.atomic():
-            update_query.execute()
-            link_delete_query.execute()
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
+            User.update(active_playlist=None).where(User.id == user_id, User.active_playlist == playlist.id).execute()
+            Link.delete().where(Link.playlist == playlist.id).execute()
             playlist.delete_instance()
 
         return playlist.name
 
     @in_executor
     def repeat(self, user_id, repeat, playlist_name):
-        playlist = self._get_playlist(user_id, playlist_name)
-        Playlist.update(repeat=repeat).where(Playlist.id == playlist.id).execute()
-
-        return playlist_name
-
-    @in_executor
-    def append(self, user_id, uris, playlist_name=None):
-        # we will return a dictionary
-        result = dict()
-        result['created_playlist'] = False
-
-        # check the song limit
-        count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)).where(Playlist.user == user_id).count()
-        if count >= self._config_max_songs:
-            raise RuntimeError('You\'ve reached the song count limit for your playlists')
-
-        # assembly the list of songs for insertion
-        song_list, result['error_list'], result['truncated'] = self._process_uris(uris, self._config_max_songs - count)
-
-        # now create the links in the database
         with self._database.atomic():
-            # atomically re-check the condition for song count
-            to_insert = self._config_max_songs - Link.select().join(Playlist, on=(Link.playlist == Playlist.id)) \
-                .where(Playlist.user == user_id).count()
-            if to_insert <= 0:
-                raise RuntimeError('You\'ve reached the song count limit for your playlists')
+            playlist = self._get_playlist(user_id, playlist_name)
+            Playlist.update(repeat=repeat).where(Playlist.id == playlist.id).execute()
 
-            # get the target playlist
-            if playlist_name is None:
-                playlist, result['created_playlist'] = self._get_active_playlist(user_id, create_default=True)
-            else:
-                playlist = self._get_playlist(user_id, playlist_name)
-
-            # store a connection point
-            connection_point = None
-            if playlist.head_id is not None:
-                connection_point = Link.get(Link.playlist == playlist.id, Link.next >> None)
-            # create a chain of songs to append
-            previous_link = None
-            for song in song_list[to_insert - 1::-1]:
-                previous_link = Link.create(playlist=playlist.id, song=song.id, next=previous_link).id
-            # connect the chain created
-            if connection_point is not None:
-                connection_point.next_id = previous_link
-                connection_point.save()
-            else:
-                Playlist.update(head=previous_link).where(Playlist.id == playlist.id).execute()
-
-        result['truncated'] |= len(song_list) > to_insert
-        result['inserted'] = min(len(song_list), to_insert)
-
-        return result
+        return playlist.name
 
     @in_executor
-    def prepend(self, user_id, uris, playlist_name=None):
-        # we will return a dictionary
-        result = dict()
-        result['created_playlist'] = False
+    def insert(self, user_id, playlist_name, prepend, uris):
+        # we will return a log of messages
+        messages = list()
 
-        # check the song limit
-        count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)).where(Playlist.user == user_id).count()
-        if count >= self._config_max_songs:
-            raise RuntimeError('You\'ve reached the song count limit for your playlists')
+        # get a playlist
+        playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name, create_default=True)
+        if created:
+            messages.append('Since you haven\'t had any playlist, a *default* one was created for you. Note that songs '
+                            'will be removed from it after playing.')
+        # construct some iterator object from uris
+        song_list = SongUriProcessor(self._config_op_credit_cap, uris, reverse=prepend)
 
-        # assembly the list of songs for insertion
-        song_list, result['error_list'], result['truncated'] = self._process_uris(uris, self._config_max_songs - count)
+        # compose "already present message"
+        present_message = 'The song [{}] {} was already present in your playlist.'
+        if prepend:
+            present_message += ' It was moved to the front.'
 
-        # now create the links in the database
-        with self._database.atomic():
-            # atomically re-check the condition for song count
-            to_insert = self._config_max_songs - Link.select().join(Playlist, on=(Link.playlist == Playlist.id)) \
-                .where(Playlist.user == user_id).count()
-            if to_insert <= 0:
-                raise RuntimeError('You\'ve reached the song count limit for your playlists')
+        # counters
+        inserted = 0
+        failed = 0
+        while True:
+            # get a next song to append
+            try:
+                song = next(song_list)
+            except StopIteration:
+                return playlist.name, inserted, failed, False, messages
+            except Exception as e:
+                # append an error to the list
+                messages.append(str(e))
+                failed += 1
+                continue
 
-            # get the target playlist
-            if playlist_name is None:
-                playlist, result['created_playlist'] = self._get_active_playlist(user_id, create_default=True)
-            else:
-                playlist = self._get_playlist(user_id, playlist_name)
+            # now insert it
+            try:
+                result = self._prepend_song(user_id, song.id, playlist.name) if prepend \
+                    else self._append_song(user_id, song.id, playlist.name)
 
-            # create a song chain to prepend
-            previous_link = playlist.head_id
-            for song in song_list[to_insert - 1::-1]:
-                previous_link = Link.create(playlist=playlist.id, song=song.id, next=previous_link).id
-            # connect the chain created
-            Playlist.update(head=previous_link).where(Playlist.id == playlist.id).execute()
-
-        result['truncated'] |= len(song_list) > to_insert
-        result['inserted'] = min(len(song_list), to_insert)
-
-        return result
+                if result:
+                    inserted += 1
+                else:  # song was in the playlist already
+                    messages.append(present_message.format(song.id, song.title))
+            except Exception as e:
+                # either reached the limit, or the playlist does not exist anymore -- either case we end return
+                messages.append(str(e))
+                return playlist.name, inserted, failed, True, messages
 
     @in_executor
-    def pop(self, user_id, count, playlist_name=None):
+    def pop(self, user_id, count, playlist_name):
         if count <= 0:
             return 0
 
         with self._database.atomic():
             # get the target playlist
-            if playlist_name is None:
-                playlist, created = self._get_active_playlist(user_id)
-            else:
-                playlist = self._get_playlist(user_id, playlist_name)
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
 
             deleted = 0
             # remove *count* links
@@ -244,115 +260,78 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil, DBSongUtil):
             # update the playlist head
             Playlist.update(head=current_link).where(Playlist.id == playlist.id).execute()
 
-        return deleted
+        return playlist_name, deleted
 
     @in_executor
-    def pop_id(self, user_id, song_id, playlist_name=None):
-        deleted = 0
+    def pop_id(self, user_id, song_id, playlist_name):
         with self._database.atomic():
             # get the target playlist
-            if playlist_name is None:
-                playlist, created = self._get_active_playlist(user_id)
-            else:
-                playlist = self._get_playlist(user_id, playlist_name)
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
 
-            # first cycle needs to handle the 'head pointer'
-            if playlist.head_id is None:
-                return deleted
-            current_link = Link.get(Link.id == playlist.head_id)
-            while current_link is not None and current_link.song_id == song_id:
-                next_link = current_link.next
-                current_link.delete_instance()
-                current_link = next_link
-                deleted += 1
-            if current_link is None:
-                # playlist remained empty
-                Playlist.update(head=None).where(Playlist.id == playlist.id).execute()
-                return deleted
-            # playlist won't be empty
-            Playlist.update(head=current_link.id).where(Playlist.id == playlist.id).execute()
+            # find the target link
+            try:
+                target_link = Link.get(Link.playlist == playlist.id, Link.song == song_id)
+            except Link.DoesNotExist:
+                raise LookupError('Specified song was not found in your playlist')
 
-            # do a second loop which is "link-only" thus better
-            previous_link = current_link
-            current_link = current_link.next
-            while current_link is not None:
-                next_link = current_link.next
-                if current_link.song_id == song_id:
-                    # we will need to delete the current link
-                    Link.update(next=current_link.next_id).where(Link.id == previous_link.id).execute()
-                    current_link.delete_instance()
-                    deleted += 1
-                else:
-                    previous_link = current_link
-                current_link = next_link
+            # find the previous link to break up the chain
+            try:
+                previous_link = Link.get(Link.next == target_link.id)
+                Link.update(next=target_link.next_id).where(Link.id == previous_link.id).execute()
+            except Link.DoesNotExist:
+                # the song is in the front of the queue
+                Playlist.update(head=target_link.next_id).where(Playlist.id == playlist.id).execute()
 
-        return deleted
+            # finally, delete the target link
+            target_link.delete_instance()
+
+        return playlist.name
 
     #
     # Internally used methods
     #
-    def _get_song(self, song_url):
-        song_uuri = self._make_uuri(song_url)
-        if not song_uuri:
-            raise ValueError('Malformed URL or unsupported service: {}'.format(song_url))
-        # potentially the first query of the song
+    def _append_song(self, user_id, song_id, playlist_name):
         try:
-            song = Song.get(Song.uuri == song_uuri)
-        except Song.DoesNotExist:
-            # we need to create a new record, youtube_dl is necessary to obtain a title and a song length
-            result = self._ytdl.extract_info(self._make_url(song_uuri), download=False, process=False)
+            with self._database.atomic():
+                # check for the song count limit
+                count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)) \
+                    .where(Playlist.user == user_id).count()
+                if count >= self._config_max_songs:
+                    raise RuntimeError('You\'ve reached the song count limit for your playlists')
+
+                # get a playlist and insert a new link at the end
+                playlist = self._get_playlist(user_id, playlist_name)
+                link = Link.create(playlist=playlist.id, song=song_id, next=None)
+                # modify a previous link
+                if playlist.head_id is None:
+                    Playlist.update(head=link.id).where(Playlist.id == playlist.id).execute()
+                else:
+                    Link.update(next=link.id).where(Link.playlist == playlist.id,
+                                                    Link.next >> None, Link.id != link.id).execute()
+        except peewee.IntegrityError:
+            return False
+        return True
+
+    def _prepend_song(self, user_id, song_id, playlist_name):
+        inserted = False
+        with self._database.atomic():
+            count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)).where(Playlist.user == user_id) \
+                .count()
+            if count >= self._config_max_songs:
+                raise RuntimeError('You\'ve reached the song count limit for your playlists')
+
+            playlist = self._get_playlist(user_id, playlist_name)
+
             try:
-                title = result['title']
-            except KeyError:
-                raise RuntimeError('Failed to extract song title')
-            try:
-                duration = int(result['duration'])
-            except (KeyError, ValueError):
-                raise RuntimeError('Failed to extract song duration')
-            song, created = Song.create_or_get(uuri=song_uuri, title=title,
-                                               last_played=datetime.utcfromtimestamp(0),
-                                               duration=duration, credit_count=self._config_op_credit_cap)
-        return song
-
-    def _process_uris(self, uris, limit):
-        song_list = list()
-        error_list = list()
-        for uri in uris:
-            if len(song_list) >= limit:
-                return song_list, error_list, True
-            if uri.isdigit():  # test if it's a plain integer -- we will assume it's an unique URI
-                try:
-                    song_list.append(Song.get(id=int(uri)))
-                except Song.DoesNotExist:
-                    error_list.append('Song [{}] cannot be found in the database'.format(uri))
-            elif self._is_list(uri):
-                try:  # because of youtube_dl
-                    result = self._ytdl.extract_info(uri, download=False)
-                    if 'entries' not in result:
-                        error_list.append('Malformed URL or unsupported service: {}'.format(uri))
-                        continue
-
-                    for entry in result['entries']:
-                        if len(song_list) >= limit:
-                            return song_list, error_list, True
-                        try:  # youtube_dl or regex matching can fail
-                            if entry['ie_key'] == 'Youtube':
-                                # for some reason youtube URLs are not URLs but video IDs
-                                entry['url'] = self._url_base['yt'].format(entry['id'])
-                            song_list.append(self._get_song(entry['url']))
-                        except ValueError as e:
-                            error_list.append(str(e))
-                        except youtube_dl.DownloadError as e:
-                            error_list.append(
-                                'Inserting `{}` from playlist failed: {}'.format(entry['url'], str(e)))
-                except youtube_dl.DownloadError as e:
-                    error_list.append('Processing list `{}` failed: {}'.format(uri, str(e)))
-            else:  # should be a single song
-                try:  # youtube_dl or regex matching can fail
-                    song_list.append(self._get_song(uri))
-                except ValueError as e:
-                    error_list.append(str(e))
-                except youtube_dl.DownloadError as e:
-                    error_list.append('Inserting `{}` failed: {}'.format(uri, str(e)))
-
-        return song_list, error_list, False
+                duplicate = Link.get(Link.playlist == playlist.id, Link.song == song_id)
+                # we will reuse the link and push it to the front
+                Link.update(next=duplicate.next_id).where(Link.playlist == playlist.id, Link.next == duplicate.id) \
+                    .execute()
+                Link.update(next=playlist.head_id).where(Link.id == duplicate.id).execute()
+                Playlist.update(head=duplicate.id).where(Playlist.id == playlist.id).execute()
+            except Link.DoesNotExist:
+                # do the "normal insert"
+                inserted = True
+                link = Link.create(playlist=playlist.id, song=song_id, next=playlist.head_id)
+                Playlist.update(head=link.id).where(Playlist.id == playlist.id).execute()
+        return inserted
