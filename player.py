@@ -174,6 +174,7 @@ class Player:
     def __init__(self, bot):
         self._bot = bot
         self._config_skip_ratio = float(bot.config['ddmbot']['skip_ratio'])
+        self._config_stream_end_transition = int(bot.config['ddmbot']['stream_end_transition'])
 
         # figure out initial state
         self._state = PlayerState.STOPPED
@@ -187,6 +188,7 @@ class Player:
         # state transition helpers
         self._transition_lock = asyncio.Lock(loop=bot.loop)
         self._switch_state = asyncio.Event(loop=bot.loop)
+        self._auto_transition_task = None
 
         self._ytdl = youtube_dl.YoutubeDL({'extract_flat': 'in_playlist', 'format': 'bestaudio/best', 'quiet': True,
                                            'no_color': True})
@@ -254,6 +256,13 @@ class Player:
             if not self.stopped:
                 self._next_state = PlayerState.STOPPED
                 self._switch_state.set()
+            # allow for cancelling auto transition task
+            elif self._auto_transition_task is not None:
+                self._auto_transition_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._auto_transition_task
+                self._auto_transition_task = None
+                await self._bot.message('Auto transition was cancelled')
 
     async def set_djmode(self):
         async with self._transition_lock:
@@ -647,6 +656,13 @@ class Player:
                 with suppress(asyncio.CancelledError):
                     await cooldown_task
 
+            # if we were in stopped state, cancel auto transition task if not finished
+            elif self.stopped and self._auto_transition_task is not None:
+                self._auto_transition_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._auto_transition_task
+                self._auto_transition_task = None
+
             # kill ffmpeg if still running
             if self._ffmpeg is not None and self._ffmpeg.poll() is None:
                 self._ffmpeg.kill()
@@ -667,9 +683,18 @@ class Player:
             return
         if self.playing or self.streaming:
             self._switch_state.set()
+        if self.streaming and self._config_stream_end_transition:
+            self._auto_transition_task = self._bot.loop.create_task(self._delayed_stream_end_transition_task())
 
     async def _delayed_dj_task(self):
         await asyncio.sleep(15, loop=self._bot.loop)
         async with self._transition_lock:
             if self.cooldown:
+                self._switch_state.set()
+
+    async def _delayed_stream_end_transition_task(self):
+        await asyncio.sleep(self._config_stream_end_transition, loop=self._bot.loop)
+        async with self._transition_lock:
+            if self.stopped:
+                self._next_state = PlayerState.DJ_PLAYING
                 self._switch_state.set()
