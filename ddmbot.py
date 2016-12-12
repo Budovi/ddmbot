@@ -23,7 +23,7 @@ import usermanager
 # set up a logger
 logging.Formatter.converter = time.gmtime
 log = logging.getLogger('ddmbot')
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 # load opus library if needed
 if not discord.opus.is_loaded():

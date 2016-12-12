@@ -65,9 +65,6 @@ class CommandHandler:
         # now inform the author of the command on the failure using PMs
         await self._bot.client.send_message(ctx.message.author, str(exception))
 
-        # print full traceback
-        traceback.print_exception(type(exception), exception, exception.__traceback__, file=sys.stderr)
-
     async def _on_command_completion(self, command, ctx):
         # figure out the argument start, it is <self> <context> <args>...
         arg_start = 2 if ctx.command.pass_context else 1
