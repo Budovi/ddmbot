@@ -412,6 +412,11 @@ class Player:
         new_stream_title = None
         if self.stopped:
             new_status_message = '**Player is stopped**'
+            # inform about automatic transition
+            if self._auto_transition_task is not None:
+                new_status_message += '\nAutomatic transition into DJ mode after {} seconds'.format(
+                    self._config_stream_end_transition)
+
             new_stream_title = 'Awkward silence'
             await self._bot.client.change_presence()
 
