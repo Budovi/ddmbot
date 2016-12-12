@@ -201,7 +201,10 @@ class UserManager:
         async with self._lock:
             if discord_id in self._listeners:
                 log.debug('Refreshing activity for user {}'.format(discord_id))
-                self._listeners[discord_id].refresh()
+                info = self._listeners[discord_id]
+                if info.notified_dj or info.notified_ds:
+                    self._whisper(discord_id, 'Your inactivity timer has been reset successfully')
+                info.refresh()
 
     #
     # Internal timeout checking task
