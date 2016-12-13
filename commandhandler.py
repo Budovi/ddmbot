@@ -8,9 +8,6 @@ from commands.playlist import Playlist
 from commands.song import Song
 from commands.user import User
 
-import traceback
-import sys
-
 
 #
 # Main command wrapper class for DdmBot
@@ -64,6 +61,10 @@ class CommandHandler:
 
         # now inform the author of the command on the failure using PMs
         await self._bot.client.send_message(ctx.message.author, str(exception))
+
+        # log the error for debugging purposes
+        log.debug('Command \'{}\' invoked by {} raised an exception\n{}'
+                  .format(ctx.command, ctx.message.author, ctx.message.content), exc_info=exception)
 
     async def _on_command_completion(self, command, ctx):
         # figure out the argument start, it is <self> <context> <args>...
