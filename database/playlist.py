@@ -322,10 +322,10 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
                 # if there is a duplicate, we won't insert a new link
                 duplicate = Link.get(Link.playlist == playlist.id, Link.song == song_id)
                 # we will reuse the link and push it to the front
-                Link.update(next=duplicate.next_id).where(Link.playlist == playlist.id, Link.next == duplicate.id) \
-                    .execute()
-                Link.update(next=playlist.head_id).where(Link.id == duplicate.id).execute()
-                Playlist.update(head=duplicate.id).where(Playlist.id == playlist.id).execute()
+                if Link.update(next=duplicate.next_id).where(Link.next == duplicate.id).execute():
+                    # we are not the first link if the statement above modified something
+                    Link.update(next=playlist.head_id).where(Link.id == duplicate.id).execute()
+                    Playlist.update(head=duplicate.id).where(Playlist.id == playlist.id).execute()
                 return False
             except Link.DoesNotExist:  # can be only raised by the previous Link.get()
                 # do the "normal insert" -- we need to check for length in this case

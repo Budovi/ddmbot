@@ -82,7 +82,7 @@ class Link(DdmBotSchema):
 
     class Meta:
         # single song copy per playlist; check for not broken playlist
-        constraints = [peewee.SQL('UNIQUE(playlist_id, song_id)'), peewee.SQL('UNIQUE(playlist_id, next_id)')]
+        constraints = [peewee.SQL('UNIQUE(playlist_id, song_id)')]
 
 DeferredLink.set_model(Link)
 
