@@ -238,6 +238,7 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             except Exception as e:
                 # either reached the limit, or the playlist does not exist anymore -- either case we end return
                 messages.append(str(e))
+                failed += 1
                 return playlist.name, inserted, failed, True, messages
 
     @in_executor
