@@ -80,10 +80,6 @@ class Link(DdmBotSchema):
     song = peewee.ForeignKeyField(Song)
     next = peewee.ForeignKeyField('self', null=True)
 
-    class Meta:
-        # single song copy per playlist; check for not broken playlist
-        constraints = [peewee.SQL('UNIQUE(playlist_id, song_id)')]
-
 DeferredLink.set_model(Link)
 
 
