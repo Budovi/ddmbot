@@ -121,7 +121,7 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             # if it's ok, create new playlist, integrity error means a playlist with the same name already exists
             try:
                 Playlist.create(user=user_id, name=playlist_name)
-            except Playlist.IntegrityError as e:
+            except peewee.IntegrityError as e:
                 raise ValueError('You already have a playlist with the chosen name'.format(playlist_name)) from e
 
     @in_executor
