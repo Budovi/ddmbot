@@ -291,47 +291,49 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
     # Internally used methods
     #
     def _append_song(self, user_id, song_id, playlist_name):
-        try:
-            with self._database.atomic():
-                # check for the song count limit
-                count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)) \
-                    .where(Playlist.user == user_id).count()
-                if count >= self._config_max_songs:
-                    raise RuntimeError('You\'ve reached the song count limit for your playlists')
-
-                # get a playlist and insert a new link at the end
-                playlist = self._get_playlist(user_id, playlist_name)
-                link = Link.create(playlist=playlist.id, song=song_id, next=None)
-                # modify a previous link
-                if playlist.head_id is None:
-                    Playlist.update(head=link.id).where(Playlist.id == playlist.id).execute()
-                else:
-                    Link.update(next=link.id).where(Link.playlist == playlist.id,
-                                                    Link.next >> None, Link.id != link.id).execute()
-        except peewee.IntegrityError:
-            return False
-        return True
-
-    def _prepend_song(self, user_id, song_id, playlist_name):
-        inserted = False
         with self._database.atomic():
+            # get a playlist
+            playlist = self._get_playlist(user_id, playlist_name)
+
+            # check for duplicates, if present just return
+            if Link.select().where(Link.playlist == playlist.id, Link.song == song_id).count():
+                return False
+            # check for the song count limit
             count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)).where(Playlist.user == user_id) \
                 .count()
             if count >= self._config_max_songs:
                 raise RuntimeError('You\'ve reached the song count limit for your playlists')
+            # insert a new link
+            link = Link.create(playlist=playlist.id, song=song_id, next=None)
+            # modify the previous link to point to the new one
+            if playlist.head_id is None:
+                Playlist.update(head=link.id).where(Playlist.id == playlist.id).execute()
+            else:
+                Link.update(next=link.id).where(Link.playlist == playlist.id,
+                                                Link.next >> None, Link.id != link.id).execute()
+            return True
 
+    def _prepend_song(self, user_id, song_id, playlist_name):
+        with self._database.atomic():
+            # get a playlist
             playlist = self._get_playlist(user_id, playlist_name)
 
             try:
+                # if there is a duplicate, we won't insert a new link
                 duplicate = Link.get(Link.playlist == playlist.id, Link.song == song_id)
                 # we will reuse the link and push it to the front
                 Link.update(next=duplicate.next_id).where(Link.playlist == playlist.id, Link.next == duplicate.id) \
                     .execute()
                 Link.update(next=playlist.head_id).where(Link.id == duplicate.id).execute()
                 Playlist.update(head=duplicate.id).where(Playlist.id == playlist.id).execute()
-            except Link.DoesNotExist:
-                # do the "normal insert"
-                inserted = True
+                return False
+            except Link.DoesNotExist:  # can be only raised by the previous Link.get()
+                # do the "normal insert" -- we need to check for length in this case
+                count = Link.select().join(Playlist, on=(Link.playlist == Playlist.id)) \
+                    .where(Playlist.user == user_id).count()
+                if count >= self._config_max_songs:
+                    raise RuntimeError('You\'ve reached the song count limit for your playlists')
+
                 link = Link.create(playlist=playlist.id, song=song_id, next=playlist.head_id)
                 Playlist.update(head=link.id).where(Playlist.id == playlist.id).execute()
-        return inserted
+                return True
