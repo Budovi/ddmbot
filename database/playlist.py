@@ -261,7 +261,7 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             # update the playlist head
             Playlist.update(head=current_link).where(Playlist.id == playlist.id).execute()
 
-        return playlist_name, deleted
+        return playlist.name, deleted
 
     @in_executor
     def pop_id(self, user_id, song_id, playlist_name):
