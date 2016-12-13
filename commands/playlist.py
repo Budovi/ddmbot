@@ -273,7 +273,7 @@ class Playlist:
         if len(messages) > 10:
             reply += '\n **>** ... (more messages suppressed)'
         if truncated:
-            reply += '\n__**Inserting was canceled before processing the whole input.**__'
+            reply += '\n__**Inserting was cancelled before processing the whole input.**__'
 
         await self._bot.whisper(reply)
 
