@@ -188,7 +188,7 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
     @in_executor
     def repeat(self, user_id, repeat, playlist_name):
         with self._database.atomic():
-            playlist = self._get_playlist(user_id, playlist_name)
+            playlist, created = self._get_playlist_ex(user_id, playlist_name=playlist_name)
             Playlist.update(repeat=repeat).where(Playlist.id == playlist.id).execute()
 
         return playlist.name
