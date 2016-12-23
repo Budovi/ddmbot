@@ -1,4 +1,5 @@
 import discord.ext.commands as dec
+import discord.ext.commands.view as decw
 
 import database.playlist
 
@@ -71,25 +72,24 @@ class Playlist:
         # TODO: CHECK FOR THE PLAYLIST NAME
         if not arguments:
             raise dec.UserInputError('Command *playlist* has no subcommand named {}. Please use `{}help playlist` to '
-                                     'list all the available subcommands.'
-                                     .format(subcommand, self._bot.config['ddmbot']['delimiter']))
+                                     'list all the available subcommands.'.format(subcommand, ctx.prefix))
         # will try to treat subcommand as a playlist name from now on
         playlist_name = subcommand
         if not await self._db.exists(int(ctx.message.author.id), playlist_name):
             raise dec.UserInputError('Command *playlist* has no subcommand named {0}, nor is it a name of your '
                                      'playlist. Please use `{1}help playlist` to list all the available subcommands '
                                      'or `{1}playlist list` to list all your playlists.'
-                                     .format(playlist_name, self._bot.config['ddmbot']['delimiter']))
+                                     .format(playlist_name, ctx.prefix))
 
         # now we try to execute a subcommand depending on the input
         #   arguments[0] == subcommand name without postfix
-        #   arguments == subcommand arguments
+        #   playlist_name + arguments[1:] == subcommand arguments
+
         # two-step approach -- tackling aliases
         subcommand = ctx.command.get_command(arguments[0])
         if subcommand is None:
             raise dec.UserInputError('Command *playlist* has no subcommand named {}. Please use `{}help playlist` to '
-                                     'list all the available subcommands.'
-                                     .format(arguments[0], self._bot.config['ddmbot']['delimiter']))
+                                     'list all the available subcommands.'.format(arguments[0], ctx.prefix))
         subcommand = subcommand.name
         # now try to call explicit version
         subcommand = ctx.command.get_command('{}_explicit'.format(subcommand))
@@ -97,8 +97,18 @@ class Playlist:
             raise dec.UserInputError('The subcommand {} does not support optional playlist specification. Please use '
                                      '`{}help playlist` to list all the available subcommands and their arguments.'
                                      .format(arguments[0], self._bot.config['ddmbot']['delimiter']))
+
+        # replace the string view with the swapped one and invoke the correct subcommand
+        swapped_command = '{}{} {} {}'.format(ctx.prefix, ctx.invoked_with, subcommand, playlist_name)
+        if arguments[1:]:
+            swapped_command += ' ' + ' '.join('"{}"'.format(arg) for arg in arguments[1:])
+        ctx.view = decw.StringView(swapped_command)
+        ctx.view.index = len(ctx.prefix) + len(ctx.invoked_with) + len(str(subcommand)) + 1
+        ctx.view.previous = ctx.view.index
+        ctx.invoked_with = arguments[0]
+
         # now invoke
-        return await ctx.invoke(subcommand, playlist_name, *arguments[1:])
+        return await subcommand.invoke(ctx)
 
     @playlist.command(pass_context=True, ignore_extra=False, aliases=['a'], help=_help_messages['active'])
     async def active(self, ctx):
