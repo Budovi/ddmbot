@@ -8,7 +8,7 @@ class UserInterface(DBInterface):
         try:
             user = User.get(id=user_id)
         except User.DoesNotExist as e:
-            raise ValueError('Specified user {} is not in the database') from e
+            raise ValueError('User is not in the database') from e
 
         with self._database.atomic():
             playlist_count = Playlist.select().where(Playlist.user == user_id).count()
