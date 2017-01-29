@@ -5,6 +5,7 @@ import errno
 import logging
 import os
 import time
+from aiohttp.errors import DisconnectedError
 from contextlib import suppress
 from logging.handlers import TimedRotatingFileHandler
 from websockets.exceptions import InvalidState
@@ -152,7 +153,7 @@ class DdmBot:
             pending = asyncio.Task.all_tasks()
             for task in pending:
                 task.cancel()
-                with suppress(asyncio.CancelledError, ConnectionError, InvalidState, asyncio.TimeoutError):
+                with suppress(asyncio.CancelledError, asyncio.TimeoutError, InvalidState, OSError):
                     self._loop.run_until_complete(task)
 
             self._loop.close()
@@ -414,7 +415,7 @@ if __name__ == '__main__':
                 ddmbot.run()
             except KeyboardInterrupt:
                 raise
-            except (discord.GatewayNotFound, discord.ConnectionClosed):
+            except (discord.ConnectionClosed, discord.GatewayNotFound, discord.HTTPException, DisconnectedError):
                 log.exception('DdmBot finished with an exception, retrying in 60 seconds')
                 time.sleep(60)
             finally:
