@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from aiohttp import web, errors
+from contextlib import suppress
 
 import awaitablelock
 
@@ -306,7 +307,8 @@ class StreamServer:
 
         # wait before terminating
         log.debug('Waiting for the client termination')
-        await connection.wait()
+        with suppress(asyncio.CancelledError):
+            await connection.wait()
 
         # now we are supposed to break the connection on request
         # self._connections.pop(user) left out INTENTIONALLY!
