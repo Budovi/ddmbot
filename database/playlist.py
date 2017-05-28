@@ -6,7 +6,8 @@ from database.common import *
 
 
 class SongUriProcessor(DBSongUtil):
-    def __init__(self, credit_cap, uris, *, reverse=False):
+    def __init__(self, database, credit_cap, uris, *, reverse=False):
+        self._database = database
         self._credit_cap = credit_cap
         self._uris = deque(uris)
         self._reverse = reverse
@@ -32,9 +33,13 @@ class SongUriProcessor(DBSongUtil):
                 duration = int(result['duration'])
             except (KeyError, ValueError) as e:
                 raise RuntimeError('Failed to extract song duration') from e
-            song, created = Song.create_or_get(uuri=song_uuri, title=title,
-                                               last_played=datetime.utcfromtimestamp(0),
-                                               duration=duration, credit_count=self._credit_cap)
+            # since the song may be about to be added multiple times, check again and insert atomically
+            with self._database.atomic():
+                try:
+                    song = Song.create(uuri=song_uuri, title=title, last_played=datetime.utcfromtimestamp(0),
+                                       duration=duration, credit_count=self._credit_cap)
+                except peewee.IntegrityError:
+                    song = Song.get(Song.uuri == song_uuri)
         return song
 
     def __next__(self):
@@ -204,7 +209,7 @@ class PlaylistInterface(DBInterface, DBPlaylistUtil):
             messages.append('Since you haven\'t had any playlist, a *default* one was created for you. Note that songs '
                             'will be removed from it after playing.')
         # construct some iterator object from uris
-        song_list = SongUriProcessor(self._config_op_credit_cap, uris, reverse=prepend)
+        song_list = SongUriProcessor(self._database, self._config_op_credit_cap, uris, reverse=prepend)
 
         # compose "already present message"
         present_message = 'The song [{}] {} was already present in your playlist.'
