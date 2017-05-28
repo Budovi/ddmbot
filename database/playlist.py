@@ -51,7 +51,7 @@ class SongUriProcessor(DBSongUtil):
         # check if song id
         if uri.isdigit():
             try:
-                return Song.get(id=int(uri))
+                return Song.get(Song.id == int(uri))
             except Song.DoesNotExist as e:
                 raise RuntimeError('Song [{}] cannot be found in the database'.format(uri)) from e
         # it can be a list otherwise
