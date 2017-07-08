@@ -11,6 +11,14 @@ class Bot:
     _help_messages = {
         'group': 'Bot controls (player modes, status, title, volume)',
 
+        'anon_disable': '* Disable direct stream for anonymous users\n\n'
+        'All anonymous connections will be terminated after issuing this command.',
+
+        'anon_enable': '* Enable direct stream for anonymous users\n\n'
+        'When enabled, users that are not a part of the discord server may join using a special URL.',
+
+        'anon_list': '* List the remote IP addresses of anonymous users',
+
         'djmode': '* Switches the player to the DJ mode\n\n'
         'In the DJ mode, users can join a DJ queue and play music from their playlists. Automatic playlist is used '
         'when no DJs are present and someone is listening. Listeners can vote to skip songs played.',
@@ -49,6 +57,33 @@ class Bot:
         raise dec.UserInputError('Command *bot* has no subcommand named {}. Please use `{}help bot` to list all the '
                                  'available subcommands.'
                                  .format(subcommand, self._bot.config['ddmbot']['delimiter']))
+
+    @bot.group(ignore_extra=False, invoke_without_command=True, aliases=['a'])
+    async def anon(self):
+        raise dec.UserInputError('You need to provide a subcommand to the *bot anon* command')
+
+    @privileged
+    @anon.command(name='disable', ignore_extra=False, aliases=['d'], help=_help_messages['anon_disable'])
+    async def anon_disable(self):
+        await self._bot.stream.disable_anon_connections()
+        await self._bot.whisper('Anonymous direct stream connections were disabled')
+
+    @privileged
+    @anon.command(name='enable', ignore_extra=False, aliases=['e'], help=_help_messages['anon_enable'])
+    async def anon_enable(self):
+        await self._bot.stream.enable_anon_connections()
+        await self._bot.whisper('Anonymous direct stream connections available at `{}`'.format(self._bot.stream.
+                                                                                               anon_stream_url))
+
+    @privileged
+    @anon.command(name='list', ignore_extra=False, aliases=['l'], help=_help_messages['anon_list'])
+    async def anon_list(self):
+        ip_list = await self._bot.stream.get_anon_ips()
+        if not ip_list:
+            reply = 'No anonymous connections'
+        else:
+            reply = '**Connected anonymous clients:**\n **>** ' + '\n **>** '.join(ip_list)
+        await self._bot.whisper(reply)
 
     @privileged
     @bot.command(ignore_extra=False, help=_help_messages['djmode'])

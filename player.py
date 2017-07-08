@@ -357,17 +357,20 @@ class Player:
     #
     # UserManager interface
     #
-    async def users_changed(self, listeners, djs_present):
+    async def users_changed(self, listeners, anonymous_present, djs_present):
         # we will need a transition lock in any case
         async with self._transition_lock:
             if self.stopped:
                 # nobody cares about users
                 return
-            if listeners:
+            if listeners or anonymous_present:
                 if self.waiting:
+                    if not listeners:
+                        # if there are only anonymous listeners, do not apply cooldown cause they cannot join anyway
+                        self._apply_cooldown = False
                     self._switch_state.set()
                     return
-            else:  # if not listeners_present
+            else:  # if no listeners present
                 if self.cooldown:
                     self._apply_cooldown = True
                     self._switch_state.set()
@@ -391,7 +394,7 @@ class Player:
         if not self._transition_lock.locked():
             raise RuntimeError('Update status may only be called with transition lock acquired')
 
-        listener_count, direct_listeners, queue = await self._bot.users.get_display_info()
+        listener_count, anonymous_count, direct_listeners, queue = await self._bot.users.get_display_info()
         # get all the display names mapping
         all_ids = direct_listeners | set(queue)
         # don't forget the name of the DJ
@@ -422,11 +425,12 @@ class Player:
             await self._bot.client.change_presence()
 
         elif self.streaming:
-            new_status_message = '**Playing stream:** {}\n**Direct listeners** ({}/{})**:** {}' \
-                .format(self._stream_title, len(direct_listeners), listener_count, dls_str)
+            new_status_message = '**Playing stream:** {}\n**Direct listeners** ({}+{}/{})**:** {}' \
+                .format(self._stream_title, len(direct_listeners), anonymous_count, listener_count + anonymous_count,
+                        dls_str)
             new_stream_title = self._stream_title
             await self._bot.client.change_presence(game=discord.Game(
-                name="a stream for {} listener(s)".format(listener_count)))
+                name="a stream for {} listener(s)".format(listener_count + anonymous_count)))
 
         elif self.waiting:
             new_status_message = '**Waiting for the first listener**'
@@ -446,11 +450,11 @@ class Player:
             skip_voters = self._song_context.get_current_counts()[1]
             skip_threshold = ceil(self._config_skip_ratio * listener_count)
 
-            new_status_message = '**Playing:** [{0.song_id}] {0.song_title}, **length** {1}:{2:02d}{3}\n' \
-                                 '**Skip votes:** {4}/{5} **Direct listeners** ({6}/{7})**:** {8}\n**Queue:** {9}' \
+            new_status_message = '**Playing:** [{0.song_id}] {0.song_title}, **length** {1}:{2:02d}{3}\n**Skip ' \
+                                 'votes:** {4}/{5} **Direct listeners** ({6}+{7}/{8})**:** {9}\n**Queue:** {10}' \
                 .format(self._song_context, self._song_context.song_duration // 60,
                         self._song_context.song_duration % 60, queued_by, skip_voters, skip_threshold,
-                        len(direct_listeners), listener_count, dls_str, djs_str)
+                        len(direct_listeners), anonymous_count, listener_count + anonymous_count, dls_str, djs_str)
 
             queued_by = '' if self._song_context.dj_id is None else ', queued by {}'.format(
                 names[self._song_context.dj_id])
@@ -579,9 +583,9 @@ class Player:
                 cooldown_task = self._bot.loop.create_task(self._delayed_dj_task())
 
             elif self.playing:
-                listeners = self._bot.users.get_current_listeners()
+                listeners, anonymous_count = self._bot.users.get_current_listeners()
                 # if there are no listeners left, we should just wait for someone to join
-                if not listeners:
+                if not listeners and anonymous_count == 0:
                     self._next_state = PlayerState.DJ_WAITING
                     continue
 

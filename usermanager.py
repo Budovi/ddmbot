@@ -50,6 +50,7 @@ class UserManager:
 
         self._tokens = dict()  # maps token (string) -> (timestamp, user)
         self._listeners = dict()  # maps discord_id (int) -> ListenerInfo
+        self._anonymous = 0
         self._queue = collections.deque()
 
     #
@@ -58,7 +59,7 @@ class UserManager:
     async def get_display_info(self):
         async with self._lock:
             direct_listeners = {key for key, value in self._listeners.items() if value.is_direct}
-            return len(self._listeners), direct_listeners, list(self._queue)
+            return len(self._listeners), self._anonymous, direct_listeners, list(self._queue)
 
     def is_listening(self, discord_id):
         return discord_id in self._listeners
@@ -84,7 +85,7 @@ class UserManager:
     # API for the player
     #
     def get_current_listeners(self):
-        return set(self._listeners.keys())
+        return set(self._listeners.keys()), self._anonymous
 
     async def get_next_dj(self):
         async with self._lock:
@@ -131,7 +132,8 @@ class UserManager:
             # now add the user to the listeners, rewriting previous entry if present
             self._listeners[discord_id] = ListenerInfo(direct=direct)
 
-            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
 
     async def remove_listener(self, discord_id, *, direct):
         async with self._lock:
@@ -147,7 +149,8 @@ class UserManager:
             # remove the user from the listeners
             self._listeners.pop(discord_id)
 
-            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
 
     async def join_queue(self, discord_id):
         async with self._lock:
@@ -157,7 +160,8 @@ class UserManager:
                 return
             self._queue.append(discord_id)
 
-            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
 
     async def leave_queue(self, discord_id):
         async with self._lock:
@@ -166,7 +170,8 @@ class UserManager:
             except ValueError as e:
                 raise ValueError('You are not in the DJ queue') from e
 
-            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
 
     async def move_listener(self, discord_id, position):
         if position < 1:
@@ -181,8 +186,15 @@ class UserManager:
                 inserted = False
             self._queue.insert(position - 1, discord_id)
 
-            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()), bool(self._queue)))
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
             return inserted, min(len(self._queue), position)
+
+    async def update_anonymous(self, new_count):
+        async with self._lock:
+            self._anonymous = new_count
+            self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
+                                                                      bool(self._anonymous), bool(self._queue)))
 
     async def generate_token(self, discord_id):
         # limit time spent in the critical section -- get the time and generate the token in advance
@@ -268,4 +280,4 @@ class UserManager:
             # now update the player
             if remove_listeners or remove_djs:
                 self._bot.loop.create_task(self._bot.player.users_changed(set(self._listeners.keys()),
-                                                                          bool(self._queue)))
+                                                                          bool(self._anonymous), bool(self._queue)))

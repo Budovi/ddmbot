@@ -82,16 +82,17 @@ class AacProcessor(threading.Thread):
 
             # calculate next transmission time
             next_time = start_time + self._frame_period * loops
-            sleep_time = max(0, self._frame_period + (next_time - time.clock_gettime(time.CLOCK_MONOTONIC_RAW)))
+            sleep_time = max(0.0, self._frame_period + (next_time - time.clock_gettime(time.CLOCK_MONOTONIC_RAW)))
             time.sleep(sleep_time)
 
 
 class ConnectionInfo:
-    __slots__ = ['_response', '_meta', '_lock', '_init']
+    __slots__ = ['_response', '_meta', '_lock', '_remote_ip', '_init']
 
-    def __init__(self, response: web.StreamResponse, meta: bool, loop: asyncio.AbstractEventLoop):
+    def __init__(self, response: web.StreamResponse, meta: bool, remote_ip: str, loop: asyncio.AbstractEventLoop):
         self._response = response
         self._meta = meta
+        self._remote_ip = remote_ip
         self._lock = asyncio.Lock(loop=loop)
         self._init = True
 
@@ -102,6 +103,10 @@ class ConnectionInfo:
     @property
     def meta(self):
         return self._meta
+
+    @property
+    def remote_ip(self):
+        return self._remote_ip
 
     @property
     def first_send(self):
@@ -135,6 +140,14 @@ class StreamServer:
         self._lock = awaitablelock.AwaitableLock(loop=bot.loop)
         # user -> ConnectionInfo
         self._connections = dict()
+        # list of anonymous connections
+        self._anon_connections = list()
+        # flag if anonymous connections should be accepted
+        self._anon_enabled = False
+        if self._config['anon_stream_state'].lower() == 'enabled':
+            self._anon_enabled = True
+        elif self._config['anon_stream_state'].lower() != 'disabled':
+            log.error('Initial anonymous stream state is invalid, assuming \'disabled\'')
 
         ffmpeg_command = 'ffmpeg -loglevel error -y -f s16le -ar {} -ac {} -i {} -f adts -c:a {} -b:a {}k {}' \
             .format(bot.voice.encoder.sampling_rate, bot.voice.encoder.channels, shlex.quote(self._config['int_pipe']),
@@ -155,6 +168,7 @@ class StreamServer:
         # TODO: handle URL encoding in the future (playlist_path may contain invalid characters)
         self._playlist_url = 'http://{hostname}:{port}{playlist_path}?token={{}}'.format_map(self._config)
         self._stream_url = 'http://{hostname}:{port}{stream_path}?token={{}}'.format_map(self._config)
+        self._anon_stream_url = 'http://{hostname}:{port}{anon_stream_path}'.format_map(self._config)
         self._playlist_response_headers = {'Connection': 'close', 'Server': 'DdmBot streaming server', 'Content-type':
                                            'audio/mpegurl'}
         self._playlist_file = '#EXTM3U\r\n#EXTINF:-1,{name}\r\nhttp://{hostname}:{port}{stream_path}?{{}}' \
@@ -176,6 +190,10 @@ class StreamServer:
     def stream_url(self):
         return self._stream_url
 
+    @property
+    def anon_stream_url(self):
+        return self._anon_stream_url
+
     #
     # Resource management wrappers
     #
@@ -183,6 +201,7 @@ class StreamServer:
         # http server initialization
         self._app = web.Application(loop=self._bot.loop)
         self._app.router.add_route('GET', self._config['stream_path'], self._handle_new_stream)
+        self._app.router.add_route('GET', self._config['anon_stream_path'], self._handle_new_stream)
         self._app.router.add_route('GET', self._config['playlist_path'], self._handle_new_playlist)
         self._handler = self._app.make_handler()
 
@@ -201,6 +220,9 @@ class StreamServer:
             for connection in self._connections.values():
                 connection.terminate()
             self._connections.clear()
+            for connection in self._anon_connections:
+                connection.terminate()
+            self._anon_connections.clear()
         if self._handler is not None:
             await self._handler.finish_connections(10)
         if self._app is not None:
@@ -245,16 +267,52 @@ class StreamServer:
             self._connections.pop(user)
 
     #
+    # Command interface
+    #
+    async def enable_anon_connections(self):
+        async with self._lock:
+            self._anon_enabled = True
+
+    async def disable_anon_connections(self):
+        async with self._lock:
+            self._anon_enabled = False
+            for connection in self._anon_connections:
+                connection.terminate()
+            self._anon_connections.clear()
+            await self._bot.users.update_anonymous(0)
+
+    async def get_anon_ips(self):
+        remote_ips = list()
+        async with self._lock:
+            for connection in self._anon_connections:
+                remote_ips.append(connection.remote_ip)
+        return remote_ips
+
+    #
     # Internal connection handling
     #
     async def _handle_new_stream(self, request):
-        # check for the token validity
-        token = request.query_string[6:]
-        user = await self._bot.users.get_token_owner(token)
-        if not request.query_string.startswith('token=') or user is None:
-            response = web.Response(status=403)
-            response.force_close()
-            return response
+        anonymous = request.path == self._config['anon_stream_path']
+        if anonymous:
+            if not self._anon_enabled:
+                response = web.Response(status=403)
+                response.force_close()
+                return response
+            user = None
+        else:
+            # check for the token validity
+            token = request.query_string[6:]
+            user = await self._bot.users.get_token_owner(token)
+            if not request.query_string.startswith('token=') or user is None:
+                response = web.Response(status=403)
+                response.force_close()
+                return response
+
+        # get peer's IP address
+        peer = request.transport.get_extra_info('peername')
+        remote_ip = peer[0] if peer is not None else 'unknown'
+        if user is None:
+            user = remote_ip
 
         # assembly the response headers
         response_headers = self._stream_response_headers.copy()
@@ -269,12 +327,12 @@ class StreamServer:
         response = web.StreamResponse(headers=response_headers)
         await response.prepare(request)
         # construct ConnectionInfo object
-        connection = ConnectionInfo(response, meta, self._bot.loop)
+        connection = ConnectionInfo(response, meta, remote_ip, self._bot.loop)
         await connection.prepare()
 
         # critical section -- we are manipulating the connections
         async with self._lock:
-            if not self._connections:
+            if not self._connections and not self._anon_connections:
                 # first listener needs to initialize everything
                 log.debug('First listener initialization')
                 # spawn cleanup task
@@ -293,17 +351,22 @@ class StreamServer:
                 self._connected.set()
                 self._aac_thread.start()
 
-            elif user in self._connections:
+            elif not anonymous and user in self._connections:
                 # break the existing connection
                 log.debug('Previous connection for user {} found, signalling to terminate'.format(user))
                 self._connections[user].terminate()
 
-            # add the connection object to the _connections dictionary
-            self._connections[user] = connection
+            # add the connection object to the _connections dictionary or _anon_connections list
+            if anonymous:
+                self._anon_connections.append(connection)
+                await self._bot.users.update_anonymous(len(self._anon_connections))
+            else:
+                self._connections[user] = connection
 
         # notify the UserManager that a new listener was added
         # race condition is possible, but only one of the connections will be served
-        await self._bot.users.add_listener(user, direct=True)
+        if not anonymous:
+            await self._bot.users.add_listener(user, direct=True)
 
         # wait before terminating
         log.debug('Waiting for the client termination')
@@ -341,6 +404,23 @@ class StreamServer:
                 if connection.meta and len(self._current_frame) == self._frame_len:
                     if init or self._meta_changed:
                         log.debug('Sending metadata to {}'.format(user))
+                        connection.response.write(self._current_meta)
+                    else:
+                        connection.response.write(b'\0')
+            # repeat the procedure for anonymous connections
+            for connection in self._anon_connections:
+                init = connection.first_send
+                # send data, if the connection is a new one whole frame (part) must be sent
+                if init:
+                    log.debug('Sending initial frame to {}'.format(connection.remote_ip))
+                    connection.response.write(self._current_frame)
+                else:
+                    connection.response.write(data)
+
+                # now, if the frame is complete, append the metadata
+                if connection.meta and len(self._current_frame) == self._frame_len:
+                    if init or self._meta_changed:
+                        log.debug('Sending metadata to {}'.format(connection.remote_ip))
                         connection.response.write(self._current_meta)
                     else:
                         connection.response.write(b'\0')
@@ -396,7 +476,24 @@ class StreamServer:
                     except ValueError:
                         log.warning('Connection broke with {}, but the user was not listening'.format(user))
 
+                # handle anonymous connections
+                disconnected.clear()
+                for connection in self._anon_connections:
+                    try:
+                        await asyncio.wait_for(connection.response.drain(), 0.001, loop=self._bot.loop)
+                    except (errors.DisconnectedError, asyncio.CancelledError, ConnectionResetError):
+                        log.debug('Connection broke with {}'.format(connection.remote_ip))
+                        disconnected.append(connection)
+                    except asyncio.TimeoutError:
+                        log.debug('Connection stalled with {}'.format(connection.remote_ip))
+                        disconnected.append(connection)
+
+                for connection in disconnected:
+                    self._anon_connections.remove(connection)
+                if disconnected:
+                    await self._bot.users.update_anonymous(len(self._anon_connections))
+
                 # cleanup must be done here because the original handler won't be resumed
-                if not self._connections:
+                if not self._connections and not self._anon_connections:
                     self._last_listener_cleanup()
                     return
