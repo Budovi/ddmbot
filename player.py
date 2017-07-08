@@ -204,8 +204,9 @@ class Player:
 
         # create PCM thread
         self._pcm_thread = PcmProcessor(self._bot, self._playback_ended_callback)
-        self._ffmpeg_command = 'ffmpeg -loglevel error -i {{}} -y -vn -f s16le -ar {} -ac {} {}'.format(
-            bot.voice.encoder.sampling_rate, bot.voice.encoder.channels, shlex.quote(bot.config['ddmbot']['pcm_pipe']))
+        self._ffmpeg_command = 'ffmpeg -reconnect 1 -reconnect_delay_max 3 -loglevel error' \
+                               ' -i {{}} -y -vn -f s16le -ar {} -ac {} {}'.format(bot.voice.encoder.sampling_rate,
+            bot.voice.encoder.channels, shlex.quote(bot.config['ddmbot']['pcm_pipe']))
 
         # database interface
         self._database = PlayerInterface(bot.loop, bot.config['ddmbot'])
